@@ -1,0 +1,160 @@
+{
+  "_instructions": "Copy the mcpServers block into: %APPDATA%\\Claude\\claude_desktop_config.json",
+  "_priority_guide": {
+    "indian_live_trading": "kite-zerodha (official, hosted, free read-only)",
+    "indian_market_data": "nse-bse-mcp (60 tools, no API key needed)",
+    "tradingview_analysis": "tradingview-mcp (30+ indicators, free, no key)",
+    "realtime_websocket": "twelve-data (only MCP with native WebSocket)",
+    "news_sentiment": "finnhub (15 tools, 60 req/min free tier)",
+    "global_fundamentals": "polygon-massive (35+ tools, free key)",
+    "signal_generation": "maverick-mcp (39 tools, backtesting, Tiingo)"
+  },
+  "mcpServers": {
+
+    "kite-zerodha": {
+      "_comment": "OFFICIAL Zerodha Kite MCP — hosted by Zerodha, no install, covers NSE+BSE+MCX. Read-only without credentials. Add API key for live trading.",
+      "_docs": "https://zerodha.com/z-connect/featured/connect-your-zerodha-account-to-ai-assistants-with-kite-mcp",
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.kite.trade/mcp"],
+      "env": {}
+    },
+
+    "nse-bse-mcp": {
+      "_comment": "60 tools: NSE/BSE market data, derivatives, option chains, bhavcopy, IPOs. No API key. Best for Indian-specific data.",
+      "_github": "https://github.com/bshada/nse-bse-mcp",
+      "_install": "npx nse-bse-mcp  OR  docker-compose up",
+      "command": "npx",
+      "args": ["nse-bse-mcp"],
+      "env": {}
+    },
+
+    "tradingview": {
+      "_comment": "30+ technical indicators, 6 backtesting strategies, 15 candlestick patterns, Reddit sentiment. Free, no API key.",
+      "_github": "https://github.com/atilaahmettaner/tradingview-mcp",
+      "_stars": "1600+",
+      "command": "uvx",
+      "args": ["tradingview-mcp"],
+      "env": {}
+    },
+
+    "twelve-data": {
+      "_comment": "ONLY MCP with native WebSocket streaming. Real-time quotes, 100+ indicators, global exchanges including NSE (.NS suffix).",
+      "_github": "https://github.com/twelvedata/mcp",
+      "_free_tier": "Limited — get key at twelvedata.com",
+      "command": "uvx",
+      "args": ["mcp-server-twelve-data"],
+      "env": {
+        "TWELVE_DATA_API_KEY": "${TWELVE_DATA_API_KEY}"
+      }
+    },
+
+    "finnhub": {
+      "_comment": "15 tools, 100+ Finnhub endpoints: real-time quotes, tick data, 50+ indicators, ESG scores, news sentiment. 60 req/min free.",
+      "_github": "https://github.com/cfdude/mcp-finnhub",
+      "_free_tier": "Yes — finnhub.io free API key",
+      "command": "uvx",
+      "args": ["mcp-finnhub"],
+      "env": {
+        "FINNHUB_API_KEY": "${FINNHUB_API_KEY}"
+      }
+    },
+
+    "polygon-massive": {
+      "_comment": "35+ tools: stocks, options, forex, crypto, futures, fundamentals, Black-Scholes pricing. Free key at massive.com.",
+      "_github": "https://github.com/massive-com/mcp_massive",
+      "_free_tier": "Yes — massive.com free key",
+      "command": "uv",
+      "args": ["tool", "run", "mcp_massive"],
+      "env": {
+        "MASSIVE_API_KEY": "${POLYGON_API_KEY}"
+      }
+    },
+
+    "alpha-vantage": {
+      "_comment": "Official Alpha Vantage MCP. Stocks, forex, crypto, commodities, 50+ indicators. Hosted at mcp.alphavantage.co (no install option).",
+      "_github": "https://github.com/alphavantage/alpha_vantage_mcp",
+      "_hosted": "https://mcp.alphavantage.co/mcp?apikey=YOUR_KEY",
+      "_free_tier": "Yes — alphavantage.co free key (25 req/day)",
+      "command": "uvx",
+      "args": ["marketdata-mcp-server", "${ALPHA_VANTAGE_API_KEY}"],
+      "env": {
+        "ALPHA_VANTAGE_API_KEY": "${ALPHA_VANTAGE_API_KEY}"
+      }
+    },
+
+    "maverick-mcp": {
+      "_comment": "39 tools: 20+ technical indicators, 15+ backtesting strategies, portfolio optimization, 520 S&P500 pre-seeded. Tiingo API.",
+      "_github": "https://github.com/wshobson/maverick-mcp",
+      "_free_tier": "Tiingo free key for basic; paid for full research",
+      "command": "uv",
+      "args": ["run", "src/maverick_mcp/server.py"],
+      "cwd": "${HOME}/.claude/mcp/maverick-mcp",
+      "env": {
+        "TIINGO_API_KEY": "${TIINGO_API_KEY}"
+      }
+    },
+
+    "india-autotrader": {
+      "_comment": "Local AutoTrader MCP — exposes positions, P&L, backtest, paper trade, signal scoring tools to Claude.",
+      "command": "python",
+      "args": ["-m", "mcp.server"],
+      "cwd": "C:/Users/koprudhviraj/Music/Projects/india-autotrader",
+      "env": {
+        "WEBHOOK_SECRET": "${WEBHOOK_SECRET}",
+        "API_SECRET_KEY": "${API_SECRET_KEY}",
+        "REDIS_URL": "redis://localhost:6379/0",
+        "PAPER_TRADING": "true",
+        "ACTIVE_BROKER": "zerodha"
+      }
+    }
+  },
+
+  "_optional_mcps": {
+    "financial-datasets": {
+      "_comment": "Income statements, balance sheets, cash flows, company news. 1900+ stars.",
+      "_github": "https://github.com/financial-datasets/mcp-server",
+      "_free_tier": "Limited — financialdatasets.ai key required"
+    },
+    "finnhub-sse": {
+      "_comment": "SSE streaming version (C#) for push-based live financial data.",
+      "_github": "https://github.com/SalZaki/finnhub-mcp"
+    },
+    "eodhd": {
+      "_comment": "77 tools: EOD/intraday/live/fundamentals/screeners/US options/ESG. Paid but comprehensive.",
+      "_github": "https://github.com/EodHistoricalData/EODHD-MCP-Server"
+    },
+    "live-nse-bse": {
+      "_comment": "14 tools: trending stocks, analyst recommendations, commodity futures. IndianAPI key.",
+      "_github": "https://github.com/GirishKumarDV/Live-NSE-BSE-MCP"
+    }
+  },
+
+  "_ai_models_for_signals": {
+    "FinGPT_v3": {
+      "_note": "Best open-source LLM for financial sentiment + forecasting",
+      "_github": "https://github.com/AI4Finance-Foundation/FinGPT",
+      "_stars": "19000+",
+      "_use": "Sentiment analysis, stock return prediction (DOW 30), robo-advisor",
+      "_model": "huggingface.co/FinGPT/fingpt-sentiment_llama2-13b_lora"
+    },
+    "FinBERT": {
+      "_note": "Best for financial news sentiment classification (97% accuracy)",
+      "_github": "https://github.com/ProsusAI/finBERT",
+      "_model": "ProsusAI/finbert on HuggingFace",
+      "_use": "Replace lexicon scoring in intelligence/news.py"
+    },
+    "Chronos_Amazon": {
+      "_note": "Best time-series foundation model for price probabilistic forecasting",
+      "_github": "https://github.com/amazon-science/chronos-forecasting",
+      "_use": "Price forecasting with uncertainty quantification"
+    },
+    "TimesFM_Google": {
+      "_note": "Strong zero-shot price series forecasting",
+      "_github": "https://github.com/google-research/timesfm"
+    },
+    "DeepSeek_R1": {
+      "_note": "Best general LLM for quantitative reasoning and financial analysis",
+      "_use": "Complex financial modeling, earnings analysis"
+    }
+  }
+}

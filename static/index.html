@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>India AutoTrader — Dashboard</title>
+  <style>
+    /* ── Reset & Base ───────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-primary:    #0d1117;
+      --bg-card:       #161b22;
+      --bg-card-alt:   #1c2128;
+      --bg-input:      #21262d;
+      --border:        #30363d;
+      --border-muted:  #21262d;
+      --accent:        #58a6ff;
+      --accent-dim:    #1f6feb;
+      --text-primary:  #e6edf3;
+      --text-secondary:#8b949e;
+      --text-muted:    #6e7681;
+      --green:         #3fb950;
+      --green-dim:     #0d4a1e;
+      --red:           #f85149;
+      --red-dim:       #4a0d0d;
+      --orange:        #d29922;
+      --orange-dim:    #4a3000;
+      --purple:        #bc8cff;
+      --purple-dim:    #2d1f5e;
+      --radius:        8px;
+      --radius-sm:     5px;
+      --shadow:        0 1px 3px rgba(0,0,0,0.4);
+    }
+
+    html { font-size: 14px; }
+
+    body {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────── */
+    .header {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.3px;
+    }
+
+    .logo-badge {
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .clock {
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .market-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.closed { background: var(--red); animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Refresh indicator ──────────────────────────────────────────── */
+    .refresh-bar {
+      background: var(--bg-card-alt);
+      border-bottom: 1px solid var(--border-muted);
+      padding: 6px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .refresh-progress {
+      flex: 1;
+      max-width: 200px;
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      margin: 0 12px;
+    }
+
+    .refresh-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 1s linear;
+    }
+
+    /* ── Main layout ────────────────────────────────────────────────── */
+    .main {
+      padding: 20px 24px;
+      max-width: 1600px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ── Grid helpers ───────────────────────────────────────────────── */
+    .grid-6 {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 14px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 1100px) {
+      .grid-6 { grid-template-columns: repeat(3, 1fr); }
+      .grid-2 { grid-template-columns: 1fr; }
+      .grid-3 { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      .grid-6 { grid-template-columns: repeat(2, 1fr); }
+      .grid-3 { grid-template-columns: 1fr; }
+      .main { padding: 12px 14px; }
+    }
+
+    /* ── Card ───────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-secondary);
+    }
+
+    .card-body { padding: 14px 16px; }
+
+    /* ── Metric card ────────────────────────────────────────────────── */
+    .metric-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .metric-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+
+    .metric-value {
+      font-size: 1.35rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-primary);
+      line-height: 1.2;
+    }
+
+    .metric-sub {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .metric-value.bullish { color: var(--green); }
+    .metric-value.bearish { color: var(--red); }
+    .metric-value.neutral { color: var(--text-primary); }
+
+    .bias-chip {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+
+    .bias-chip.bullish { background: var(--green-dim); color: var(--green); }
+    .bias-chip.bearish { background: var(--red-dim); color: var(--red); }
+    .bias-chip.neutral { background: var(--bg-input); color: var(--text-secondary); }
+
+    /* ── TradingView ────────────────────────────────────────────────── */
+    .chart-section .card-header { gap: 12px; }
+
+    .symbol-switcher {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .sym-btn {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      padding: 4px 12px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      min-width: 44px;
+      min-height: 28px;
+    }
+
+    .sym-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .sym-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+
+    .chart-container {
+      height: 450px;
+      background: #131722;
+    }
+
+    /* ── Signal cards ───────────────────────────────────────────────── */
+    .signal-item {
+      background: var(--bg-card-alt);
+      border: 1px solid var(--border-muted);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      position: relative;
+      transition: border-color 0.15s;
+    }
+
+    .signal-item:last-child { margin-bottom: 0; }
+    .signal-item:hover { border-color: var(--border); }
+
+    .signal-item.buy-ce  { border-left: 3px solid var(--green); }
+    .signal-item.buy-pe  { border-left: 3px solid var(--red); }
+    .signal-item.sell-ce { border-left: 3px solid var(--orange); }
+    .signal-item.sell-pe { border-left: 3px solid var(--purple); }
+
+    .signal-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .signal-symbol {
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    .signal-action-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 20px;
+      letter-spacing: 0.4px;
+    }
+
+    .badge-buy-ce  { background: var(--green-dim); color: var(--green); }
+    .badge-buy-pe  { background: var(--red-dim); color: var(--red); }
+    .badge-sell-ce { background: var(--orange-dim); color: var(--orange); }
+    .badge-sell-pe { background: var(--purple-dim); color: var(--purple); }
+
+    .signal-meta {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .signal-meta span { margin-right: 12px; }
+
+    .signal-rationale {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      line-height: 1.45;
+      margin-bottom: 8px;
+    }
+
+    /* ── Confidence bar ─────────────────────────────────────────────── */
+    .conf-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .conf-label { font-size: 0.72rem; color: var(--text-muted); min-width: 70px; }
+
+    .conf-bar-bg {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .conf-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .conf-bar-fill.high   { background: var(--green); }
+    .conf-bar-fill.medium { background: var(--orange); }
+    .conf-bar-fill.low    { background: var(--red); }
+
+    .conf-pct { font-size: 0.75rem; font-weight: 600; min-width: 36px; text-align: right; }
+
+    /* ── Risk badge ─────────────────────────────────────────────────── */
+    .risk-badges { display: flex; flex-wrap: wrap; gap: 5px; }
+
+    .risk-badge {
+      background: var(--orange-dim);
+      color: var(--orange);
+      border: 1px solid #5a4000;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+
+    /* ── Scanner pick ───────────────────────────────────────────────── */
+    .pick-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border-muted);
+      gap: 8px;
+    }
+
+    .pick-item:last-child { border-bottom: none; }
+
+    .pick-left { flex: 1; }
+    .pick-symbol { font-size: 0.9rem; font-weight: 700; }
+    .pick-meta   { font-size: 0.72rem; color: var(--text-muted); }
+
+    .pick-score {
+      font-size: 0.82rem;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 20px;
+    }
+
+    .pick-score.positive { background: var(--green-dim); color: var(--green); }
+    .pick-score.negative { background: var(--red-dim); color: var(--red); }
+    .pick-score.neutral  { background: var(--bg-input); color: var(--text-secondary); }
+
+    .pick-action {
+      font-size: 0.75rem;
+      font-weight: 600;
+      min-width: 36px;
+      text-align: right;
+      color: var(--text-secondary);
+    }
+
+    /* ── Position row ───────────────────────────────────────────────── */
+    .position-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    .position-table th {
+      text-align: left;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--text-muted);
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border-muted);
+    }
+
+    .position-table td {
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--border-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .position-table tr:last-child td { border-bottom: none; }
+
+    .position-table td:nth-child(3),
+    .position-table td:nth-child(4),
+    .position-table td:nth-child(5),
+    .position-table td:nth-child(6) { text-align: right; }
+
+    .pnl-positive { color: var(--green); font-weight: 600; }
+    .pnl-negative { color: var(--red); font-weight: 600; }
+
+    /* ── AI model tag ────────────────────────────────────────────────── */
+    .ai-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .model-tag {
+      background: var(--bg-input);
+      color: var(--text-muted);
+      border: 1px solid var(--border-muted);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.7rem;
+    }
+
+    .timestamp-tag {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    /* ── Skeleton loader ─────────────────────────────────────────────── */
+    .skeleton {
+      background: linear-gradient(90deg, var(--bg-input) 25%, var(--bg-card-alt) 50%, var(--bg-input) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: var(--radius-sm);
+    }
+
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ── Empty state ─────────────────────────────────────────────────── */
+    .empty-state {
+      text-align: center;
+      padding: 32px 20px;
+      color: var(--text-muted);
+    }
+
+    .empty-state .empty-icon { font-size: 2rem; margin-bottom: 8px; }
+    .empty-state .empty-msg  { font-size: 0.85rem; }
+
+    /* ── Error state ─────────────────────────────────────────────────── */
+    .error-state {
+      background: var(--red-dim);
+      border: 1px solid var(--red);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 0.82rem;
+      color: var(--red);
+    }
+
+    /* ── Section label ───────────────────────────────────────────────── */
+    .section-label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    /* ── Scrollable card body ────────────────────────────────────────── */
+    .card-body-scroll {
+      padding: 14px 16px;
+      max-height: 480px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .card-body-scroll::-webkit-scrollbar { width: 4px; }
+    .card-body-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Reduced motion support ──────────────────────────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────── -->
+<header class="header" role="banner">
+  <div class="header-left">
+    <span class="logo" aria-label="India AutoTrader">India AutoTrader</span>
+    <span class="logo-badge" id="trading-mode" aria-live="polite">Paper</span>
+  </div>
+  <div class="header-right">
+    <div class="market-status" aria-live="polite">
+      <div class="status-dot" id="market-dot" aria-hidden="true"></div>
+      <span id="market-status-text">Checking...</span>
+    </div>
+    <time class="clock" id="clock" aria-label="Current IST time">--:--:--</time>
+  </div>
+</header>
+
+<!-- ── Refresh bar ─────────────────────────────────────────────────── -->
+<div class="refresh-bar" role="status" aria-live="polite" aria-label="Auto-refresh status">
+  <span>Auto-refresh every 30 seconds</span>
+  <div class="refresh-progress" aria-hidden="true">
+    <div class="refresh-fill" id="refresh-fill" style="width:100%"></div>
+  </div>
+  <span id="refresh-countdown">Next refresh in <strong id="refresh-secs">30</strong>s</span>
+</div>
+
+<!-- ── Main ──────────────────────────────────────────────────────────── -->
+<main class="main" id="main-content">
+
+  <!-- Row 1: Market context metrics -->
+  <section aria-labelledby="market-context-heading">
+    <h1 id="market-context-heading" class="section-label">Market Context</h1>
+    <div class="grid-6" id="market-metrics">
+      <div class="metric-card" id="mc-bias">
+        <span class="metric-label">Market Bias</span>
+        <span class="metric-value neutral skeleton" style="height:28px;width:80%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-score">Score: —</span>
+      </div>
+      <div class="metric-card" id="mc-vix">
+        <span class="metric-label">India VIX</span>
+        <span class="metric-value skeleton" style="height:28px;width:60%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-vix-sub">—</span>
+      </div>
+      <div class="metric-card" id="mc-fii">
+        <span class="metric-label">FII Net</span>
+        <span class="metric-value skeleton" style="height:28px;width:70%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-dii">DII: —</span>
+      </div>
+      <div class="metric-card" id="mc-gift">
+        <span class="metric-label">Gift Nifty</span>
+        <span class="metric-value skeleton" style="height:28px;width:65%;">&nbsp;</span>
+        <span class="metric-sub">Overnight signal</span>
+      </div>
+      <div class="metric-card" id="mc-usdinr">
+        <span class="metric-label">USD / INR</span>
+        <span class="metric-value skeleton" style="height:28px;width:60%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-crude">Crude: —</span>
+      </div>
+      <div class="metric-card" id="mc-us">
+        <span class="metric-label">US Markets</span>
+        <span class="metric-value skeleton" style="height:28px;width:75%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-nasdaq">Nasdaq: —</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Row 2: TradingView chart -->
+  <section class="chart-section card" aria-labelledby="chart-heading">
+    <div class="card-header">
+      <h2 class="card-title" id="chart-heading">Live Chart</h2>
+      <nav class="symbol-switcher" aria-label="Chart symbol selector">
+        <button class="sym-btn active" onclick="switchSymbol('NSE:RELIANCE', this)" aria-pressed="true">RELIANCE</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:HDFCBANK', this)" aria-pressed="false">HDFCBANK</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:INFY', this)" aria-pressed="false">INFY</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:TCS', this)" aria-pressed="false">TCS</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:ICICIBANK', this)" aria-pressed="false">ICICIBANK</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:INFY', this)" aria-pressed="false">INFY</button>
+      </nav>
+    </div>
+    <div class="chart-container" id="tv_chart" aria-label="TradingView price chart"></div>
+  </section>
+
+  <!-- Row 3: AI signals + Scanner picks -->
+  <div class="grid-2">
+
+    <!-- AI Options Signals -->
+    <section class="card" aria-labelledby="ai-signals-heading">
+      <div class="card-header">
+        <h2 class="card-title" id="ai-signals-heading">AI Options Signals</h2>
+        <div class="ai-meta">
+          <span class="model-tag" id="ai-model-tag">Gemma 4</span>
+          <span class="timestamp-tag" id="ai-timestamp">—</span>
+        </div>
+      </div>
+      <div class="card-body-scroll" id="ai-signals-body">
+        <div class="skeleton" style="height:90px;margin-bottom:10px;border-radius:5px;"></div>
+        <div class="skeleton" style="height:90px;border-radius:5px;"></div>
+      </div>
+    </section>
+
+    <!-- Scanner Picks -->
+    <section class="card" aria-labelledby="scanner-heading">
+      <div class="card-header">
+        <h2 class="card-title" id="scanner-heading">Top Scanner Picks</h2>
+        <span id="scanner-ts" style="font-size:0.7rem;color:var(--text-muted);">—</span>
+      </div>
+      <div class="card-body-scroll" id="scanner-body">
+        <div class="skeleton" style="height:44px;margin-bottom:8px;border-radius:5px;"></div>
+        <div class="skeleton" style="height:44px;margin-bottom:8px;border-radius:5px;"></div>
+        <div class="skeleton" style="height:44px;border-radius:5px;"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Row 4: Positions -->
+  <section class="card" aria-labelledby="positions-heading">
+    <div class="card-header">
+      <h2 class="card-title" id="positions-heading">Open Positions</h2>
+      <span id="positions-count" style="font-size:0.75rem;color:var(--text-muted);">—</span>
+    </div>
+    <div class="card-body" id="positions-body" style="overflow-x:auto;">
+      <div class="skeleton" style="height:36px;margin-bottom:6px;border-radius:5px;"></div>
+      <div class="skeleton" style="height:36px;border-radius:5px;"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ── Lightweight Charts (open-source, no login required) ────────── -->
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+   India AutoTrader Dashboard — vanilla JS
+   All API calls use fetch(). Auto-refresh every 30 s.
+   ────────────────────────────────────────────────────────────────────── */
+
+const REFRESH_INTERVAL = 30; // seconds
+let _lwChart = null;
+let _candleSeries = null;
+let _volSeries = null;
+let _refreshTimer = null;
+let _countdown = REFRESH_INTERVAL;
+
+/* ── Clock + market hours ──────────────────────────────────────────── */
+function updateClock() {
+  const now = new Date();
+  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const hh = String(ist.getHours()).padStart(2, '0');
+  const mm = String(ist.getMinutes()).padStart(2, '0');
+  const ss = String(ist.getSeconds()).padStart(2, '0');
+  document.getElementById('clock').textContent = `${hh}:${mm}:${ss} IST`;
+
+  const h = ist.getHours();
+  const m = ist.getMinutes();
+  const day = ist.getDay(); // 0=Sun, 6=Sat
+  const isWeekday = day >= 1 && day <= 5;
+  const totalMins = h * 60 + m;
+  const isOpen = isWeekday && totalMins >= 555 && totalMins < 930; // 9:15–15:30
+
+  const dot = document.getElementById('market-dot');
+  const statusText = document.getElementById('market-status-text');
+  if (isOpen) {
+    dot.classList.remove('closed');
+    statusText.textContent = 'Market Open';
+  } else {
+    dot.classList.add('closed');
+    statusText.textContent = isWeekday ? 'Market Closed' : 'Weekend';
+  }
+}
+
+/* ── Lightweight Charts ────────────────────────────────────────────── */
+function initChart(symbol = 'NSE:RELIANCE') {
+  const container = document.getElementById('tv_chart');
+  container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:400px;color:#8b949e;font-size:13px">Loading chart for ' + symbol.replace('NSE:','') + '…</div>';
+
+  // Strip exchange prefix for our API (NSE:RELIANCE → RELIANCE)
+  const apiSymbol = symbol.includes(':') ? symbol.split(':')[1] : symbol;
+
+  fetch('/api/ohlcv/' + apiSymbol + '?days=90')
+    .then(r => r.json())
+    .then(data => {
+      const candles = data.candles;
+      if (!candles || candles.length === 0) {
+        container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:400px;color:#f85149">No data for ' + apiSymbol + '</div>';
+        return;
+      }
+
+      container.innerHTML = '';
+      container.style.position = 'relative';
+
+      if (_lwChart) { try { _lwChart.remove(); } catch(_) {} }
+
+      _lwChart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 420,
+        layout: { background: { color: '#0d1117' }, textColor: '#8b949e' },
+        grid: { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#30363d' },
+        timeScale: { borderColor: '#30363d', timeVisible: true },
+      });
+
+      _candleSeries = _lwChart.addCandlestickSeries({
+        upColor: '#3fb950', downColor: '#f85149',
+        borderUpColor: '#3fb950', borderDownColor: '#f85149',
+        wickUpColor: '#3fb950', wickDownColor: '#f85149',
+      });
+
+      _candleSeries.setData(candles.map(c => ({
+        time: c.time,
+        open: c.open, high: c.high, low: c.low, close: c.close,
+      })));
+
+      _lwChart.timeScale().fitContent();
+
+      // Responsive resize
+      const ro = new ResizeObserver(() => {
+        if (_lwChart) _lwChart.applyOptions({ width: container.clientWidth });
+      });
+      ro.observe(container);
+
+      // Symbol label overlay
+      const label = document.createElement('div');
+      label.style.cssText = 'position:absolute;top:10px;left:14px;font-size:13px;font-weight:600;color:#e6edf3;pointer-events:none;z-index:2';
+      label.textContent = apiSymbol + ' · Daily';
+      container.appendChild(label);
+    })
+    .catch(err => {
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:400px;color:#f85149">Error: ' + err.message + '</div>';
+    });
+}
+
+function switchSymbol(symbol, btn) {
+  document.querySelectorAll('.sym-btn').forEach(b => {
+    b.classList.remove('active');
+    b.setAttribute('aria-pressed', 'false');
+  });
+  btn.classList.add('active');
+  btn.setAttribute('aria-pressed', 'true');
+  initChart(symbol);
+}
+
+/* ── Format helpers ────────────────────────────────────────────────── */
+function fmtChg(val) {
+  if (val === null || val === undefined) return '—';
+  const sign = val >= 0 ? '+' : '';
+  return `${sign}${Number(val).toFixed(2)}%`;
+}
+
+function fmtCrore(val) {
+  if (val === null || val === undefined) return '—';
+  const sign = val >= 0 ? '+' : '';
+  return `${sign}${Number(val).toFixed(0)} Cr`;
+}
+
+function fmtTs(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+}
+
+function biasClass(bias) {
+  if (!bias) return 'neutral';
+  const b = bias.toLowerCase();
+  if (b.includes('bull')) return 'bullish';
+  if (b.includes('bear')) return 'bearish';
+  return 'neutral';
+}
+
+function actionClass(action) {
+  const map = { 'BUY_CE': 'buy-ce', 'BUY_PE': 'buy-pe', 'SELL_CE': 'sell-ce', 'SELL_PE': 'sell-pe' };
+  return map[action] || '';
+}
+
+function badgeClass(action) {
+  const map = { 'BUY_CE': 'badge-buy-ce', 'BUY_PE': 'badge-buy-pe', 'SELL_CE': 'badge-sell-ce', 'SELL_PE': 'badge-sell-pe' };
+  return map[action] || '';
+}
+
+function confClass(conf) {
+  if (conf >= 0.7) return 'high';
+  if (conf >= 0.45) return 'medium';
+  return 'low';
+}
+
+function esc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* ── Render: Market context ────────────────────────────────────────── */
+function renderMarketContext(ctx) {
+  if (!ctx || Object.keys(ctx).length === 0) {
+    // Show stale state if empty
+    document.getElementById('mc-bias').querySelector('.metric-value').innerHTML =
+      '<span class="bias-chip neutral">No data</span>';
+    return;
+  }
+
+  const bc = biasClass(ctx.bias || ctx.market_bias || '');
+
+  // Bias card
+  const biasEl = document.getElementById('mc-bias');
+  biasEl.querySelector('.metric-value').innerHTML =
+    `<span class="bias-chip ${bc}">${esc((ctx.bias || ctx.market_bias || 'NEUTRAL').toUpperCase())}</span>`;
+  biasEl.querySelector('.metric-value').className = 'metric-value';
+  document.getElementById('mc-score').textContent =
+    `Score: ${ctx.score !== undefined ? (ctx.score > 0 ? '+' : '') + Number(ctx.score).toFixed(2) : '—'}`;
+
+  // VIX
+  const vix = ctx.india_vix;
+  const vixEl = document.getElementById('mc-vix');
+  const vixClass = vix > 20 ? 'bearish' : vix > 15 ? 'neutral' : 'bullish';
+  vixEl.querySelector('.metric-value').textContent = vix !== undefined ? Number(vix).toFixed(1) : '—';
+  vixEl.querySelector('.metric-value').className = `metric-value ${vixClass}`;
+  document.getElementById('mc-vix-sub').textContent = vix > 20 ? 'High — sell premium' : vix > 15 ? 'Medium' : 'Low — buy options';
+
+  // FII/DII
+  const fii = ctx.fii_net_crore;
+  const dii = ctx.dii_net_crore;
+  const fiiEl = document.getElementById('mc-fii');
+  fiiEl.querySelector('.metric-value').textContent = fii !== undefined ? fmtCrore(fii) : '—';
+  fiiEl.querySelector('.metric-value').className = `metric-value ${fii >= 0 ? 'bullish' : 'bearish'}`;
+  document.getElementById('mc-dii').textContent = `DII: ${dii !== undefined ? fmtCrore(dii) : '—'}`;
+
+  // Gift Nifty
+  const gift = ctx.gift_nifty_change_pct;
+  const giftEl = document.getElementById('mc-gift');
+  giftEl.querySelector('.metric-value').textContent = gift !== undefined ? fmtChg(gift) : '—';
+  giftEl.querySelector('.metric-value').className = `metric-value ${gift >= 0 ? 'bullish' : 'bearish'}`;
+
+  // USD/INR + Crude
+  const usdinr = ctx.usdinr;
+  const crude = ctx.crude_oil_usd;
+  const fxEl = document.getElementById('mc-usdinr');
+  fxEl.querySelector('.metric-value').textContent = usdinr !== undefined ? Number(usdinr).toFixed(2) : '—';
+  fxEl.querySelector('.metric-value').className = 'metric-value';
+  document.getElementById('mc-crude').textContent = crude !== undefined ? `Crude: $${Number(crude).toFixed(1)}` : 'Crude: —';
+
+  // US markets
+  const sp = ctx.sp500_change_pct;
+  const nq = ctx.nasdaq_change_pct;
+  const usEl = document.getElementById('mc-us');
+  usEl.querySelector('.metric-value').textContent = sp !== undefined ? `S&P ${fmtChg(sp)}` : '—';
+  usEl.querySelector('.metric-value').className = `metric-value ${sp >= 0 ? 'bullish' : 'bearish'}`;
+  document.getElementById('mc-nasdaq').textContent = nq !== undefined ? `Nasdaq: ${fmtChg(nq)}` : 'Nasdaq: —';
+}
+
+/* ── Render: AI signals ────────────────────────────────────────────── */
+function renderAISignals(data) {
+  const body = document.getElementById('ai-signals-body');
+  const signals = data.signals || [];
+
+  if (data.model) {
+    document.getElementById('ai-model-tag').textContent = data.model.split('/')[1] || data.model;
+  }
+  if (data.generated_at) {
+    document.getElementById('ai-timestamp').textContent = `Updated ${fmtTs(data.generated_at)}`;
+  }
+
+  if (signals.length === 0) {
+    body.innerHTML = `
+      <div class="empty-state" role="status">
+        <div class="empty-icon" aria-hidden="true">🤖</div>
+        <div class="empty-msg">${esc(data.message || 'No signals yet. AI runs every 30 min during market hours.')}</div>
+      </div>`;
+    return;
+  }
+
+  body.innerHTML = signals.map(s => {
+    const conf = Math.min(1, Math.max(0, s.confidence || 0));
+    const confPct = Math.round(conf * 100);
+    const cClass = confClass(conf);
+
+    const strikeStr = s.strike ? ` ₹${Number(s.strike).toFixed(0)}` : '';
+    const premStr = s.premium_est ? ` ~₹${Number(s.premium_est).toFixed(0)}` : '';
+    const risks = (s.risk_factors || []).slice(0, 3);
+
+    return `
+    <article class="signal-item ${actionClass(s.action)}" aria-label="${esc(s.symbol)} ${esc(s.action)} signal">
+      <div class="signal-top">
+        <span class="signal-symbol">${esc(s.symbol)}${strikeStr}</span>
+        <span class="signal-action-badge ${badgeClass(s.action)}">${esc(s.action)}</span>
+        <span style="font-size:0.78rem;color:var(--text-muted);">${esc(s.expiry)}${premStr}</span>
+      </div>
+      <div class="signal-meta">
+        <span>Target: <strong style="color:var(--green)">+${Number(s.target_pct).toFixed(0)}%</strong></span>
+        <span>SL: <strong style="color:var(--red)">-${Number(s.sl_pct).toFixed(0)}%</strong></span>
+      </div>
+      <div class="conf-row" aria-label="Confidence ${confPct}%">
+        <span class="conf-label">Confidence</span>
+        <div class="conf-bar-bg" role="progressbar" aria-valuenow="${confPct}" aria-valuemin="0" aria-valuemax="100">
+          <div class="conf-bar-fill ${cClass}" style="width:${confPct}%"></div>
+        </div>
+        <span class="conf-pct" style="color:var(--${cClass === 'high' ? 'green' : cClass === 'medium' ? 'orange' : 'red'})">${confPct}%</span>
+      </div>
+      ${s.rationale ? `<p class="signal-rationale">${esc(s.rationale.slice(0, 200))}</p>` : ''}
+      ${risks.length > 0 ? `
+      <div class="risk-badges" aria-label="Risk factors">
+        ${risks.map(r => `<span class="risk-badge">⚠ ${esc(r)}</span>`).join('')}
+      </div>` : ''}
+    </article>`;
+  }).join('');
+}
+
+/* ── Render: Scanner picks ─────────────────────────────────────────── */
+function renderScanner(data) {
+  const body = document.getElementById('scanner-body');
+  const picks = data.top_picks || data.picks || [];
+  const ts = data.scanned_at || data.generated_at;
+
+  if (ts) {
+    document.getElementById('scanner-ts').textContent = `${fmtTs(ts)}`;
+  }
+
+  if (picks.length === 0) {
+    body.innerHTML = `
+      <div class="empty-state" role="status">
+        <div class="empty-icon" aria-hidden="true">📡</div>
+        <div class="empty-msg">No scanner picks. Scan runs every 15 min from 09:30 IST.</div>
+      </div>`;
+    return;
+  }
+
+  body.innerHTML = picks.slice(0, 10).map(p => {
+    const score = p.score !== undefined ? Number(p.score) : null;
+    const scoreClass = score === null ? 'neutral' : score > 0 ? 'positive' : 'negative';
+    const scoreText = score !== null ? (score > 0 ? `+${score.toFixed(1)}` : score.toFixed(1)) : '—';
+
+    return `
+    <div class="pick-item" role="listitem">
+      <div class="pick-left">
+        <div class="pick-symbol">${esc(p.symbol || '?')}</div>
+        <div class="pick-meta">${esc(p.wyckoff_phase || '')} ${p.breakout_type ? '· ' + esc(p.breakout_type) : ''}</div>
+      </div>
+      <span class="pick-action" style="color:${(p.action || '').includes('BUY') ? 'var(--green)' : 'var(--red)'}">
+        ${esc(p.action || '—')}
+      </span>
+      <span class="pick-score ${scoreClass}" aria-label="Score ${scoreText}">${scoreText}</span>
+    </div>`;
+  }).join('');
+}
+
+/* ── Render: Positions ─────────────────────────────────────────────── */
+function renderPositions(data) {
+  const body = document.getElementById('positions-body');
+  const positions = data.positions || [];
+  document.getElementById('positions-count').textContent =
+    `${positions.length} position${positions.length !== 1 ? 's' : ''}`;
+
+  if (positions.length === 0) {
+    body.innerHTML = `
+      <div class="empty-state" role="status">
+        <div class="empty-icon" aria-hidden="true">📂</div>
+        <div class="empty-msg">No open positions.</div>
+      </div>`;
+    return;
+  }
+
+  const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
+  const pnlClass = totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+  const pnlSign = totalPnl >= 0 ? '+' : '';
+
+  body.innerHTML = `
+    <table class="position-table" aria-label="Open positions">
+      <thead>
+        <tr>
+          <th scope="col">Symbol</th>
+          <th scope="col">Exchange</th>
+          <th scope="col">Qty</th>
+          <th scope="col">Avg Price</th>
+          <th scope="col">LTP</th>
+          <th scope="col">P&amp;L</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${positions.map(p => {
+          const pnlC = (p.pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative';
+          const pnlS = (p.pnl || 0) >= 0 ? '+' : '';
+          return `
+          <tr>
+            <td><strong>${esc(p.symbol || '—')}</strong></td>
+            <td style="color:var(--text-muted)">${esc(p.exchange || '—')}</td>
+            <td style="text-align:right">${p.qty !== undefined ? p.qty : '—'}</td>
+            <td style="text-align:right">₹${p.avg_price !== undefined ? Number(p.avg_price).toFixed(2) : '—'}</td>
+            <td style="text-align:right">₹${p.ltp !== undefined ? Number(p.ltp).toFixed(2) : '—'}</td>
+            <td style="text-align:right" class="${pnlC}">₹${pnlS}${p.pnl !== undefined ? Number(p.pnl).toFixed(2) : '—'}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="5" style="padding:8px;font-weight:600;color:var(--text-secondary)">Total P&amp;L</td>
+          <td style="text-align:right;padding:8px" class="${pnlClass}">
+            <strong>₹${pnlSign}${totalPnl.toFixed(2)}</strong>
+          </td>
+        </tr>
+      </tfoot>
+    </table>`;
+}
+
+/* ── API fetch helpers ─────────────────────────────────────────────── */
+async function fetchJSON(url) {
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function showError(containerId, msg) {
+  document.getElementById(containerId).innerHTML =
+    `<div class="error-state" role="alert">Error: ${esc(msg)}</div>`;
+}
+
+/* ── Main data load ────────────────────────────────────────────────── */
+async function loadDashboard() {
+  // Market context + AI signals + scanner via /api/dashboard (single call)
+  try {
+    const dash = await fetchJSON('/api/dashboard');
+
+    if (dash.market_context) renderMarketContext(dash.market_context);
+    if (dash.ai_signals)    renderAISignals(dash.ai_signals);
+    if (dash.scanner)       renderScanner(dash.scanner);
+  } catch (err) {
+    // Fallback: individual calls
+    try {
+      const ctx = await fetchJSON('/intelligence/context');
+      renderMarketContext(ctx);
+    } catch (e) {
+      showError('mc-bias', e.message);
+    }
+
+    try {
+      const ai = await fetchJSON('/api/ai/signals');
+      renderAISignals(ai);
+    } catch (e) {
+      showError('ai-signals-body', e.message);
+    }
+
+    try {
+      const scan = await fetchJSON('/scanner/latest');
+      renderScanner(scan);
+    } catch (e) {
+      showError('scanner-body', e.message);
+    }
+  }
+
+  // Positions always fetched separately
+  try {
+    const pos = await fetchJSON('/positions');
+    renderPositions(pos);
+  } catch (e) {
+    showError('positions-body', e.message);
+  }
+}
+
+/* ── Countdown + auto-refresh ──────────────────────────────────────── */
+function startCountdown() {
+  _countdown = REFRESH_INTERVAL;
+  clearInterval(_refreshTimer);
+
+  _refreshTimer = setInterval(() => {
+    _countdown -= 1;
+    const fill = document.getElementById('refresh-fill');
+    const secs = document.getElementById('refresh-secs');
+    if (fill) fill.style.width = `${(_countdown / REFRESH_INTERVAL) * 100}%`;
+    if (secs) secs.textContent = _countdown;
+
+    if (_countdown <= 0) {
+      clearInterval(_refreshTimer);
+      loadDashboard().then(() => startCountdown());
+    }
+  }, 1000);
+}
+
+/* ── Init ──────────────────────────────────────────────────────────── */
+(function init() {
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  initChart('NSE:RELIANCE');
+  loadDashboard().then(() => startCountdown());
+
+  // Set mode badge from health endpoint
+  fetchJSON('/health').then(h => {
+    const badge = document.getElementById('trading-mode');
+    if (h.paper_trading === false) {
+      badge.textContent = 'Live';
+      badge.style.background = 'var(--red-dim)';
+      badge.style.color = 'var(--red)';
+    } else {
+      badge.textContent = 'Paper';
+    }
+  }).catch(() => {});
+})();
+</script>
+
+</body>
+</html>

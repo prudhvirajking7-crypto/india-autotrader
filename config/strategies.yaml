@@ -1,0 +1,56 @@
+# Strategy-level risk overrides and parameters.
+# Keys match the "strategy" field in TradingView webhook payloads.
+
+defaults:
+  product: MIS           # MIS (intraday) | CNC (delivery) | NRML (F&O)
+  order_type: MARKET     # MARKET | LIMIT | SL | SL-M
+  exchange: NSE
+  risk_per_trade_pct: 1.0
+  max_open_positions: 5
+
+strategies:
+  ema_cross:
+    description: "EMA 9/21 crossover, intraday equities"
+    product: MIS
+    order_type: MARKET
+    exchange: NSE
+    risk_per_trade_pct: 1.0
+    max_open_positions: 3
+    stop_loss_pct: 0.5
+    target_pct: 1.0
+    symbols:
+      - RELIANCE
+      - HDFCBANK
+      - INFY
+      - TCS
+      - ICICIBANK
+
+  rsi_mean_reversion:
+    description: "RSI 14 oversold/overbought mean reversion"
+    product: MIS
+    order_type: LIMIT
+    exchange: NSE
+    risk_per_trade_pct: 0.75
+    max_open_positions: 4
+    stop_loss_pct: 0.75
+    target_pct: 1.5
+
+  supertrend:
+    description: "Supertrend ATR-based trend following"
+    product: CNC
+    order_type: MARKET
+    exchange: NSE
+    risk_per_trade_pct: 1.5
+    max_open_positions: 5
+    stop_loss_pct: 1.0
+    target_pct: 3.0
+
+  nifty_options:
+    description: "NIFTY weekly options strategy"
+    product: NRML
+    order_type: MARKET
+    exchange: NFO
+    risk_per_trade_pct: 2.0
+    max_open_positions: 2
+    stop_loss_pct: 30.0   # % of premium
+    target_pct: 50.0      # % of premium
