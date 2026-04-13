@@ -70,6 +70,11 @@ def create_app() -> FastAPI:
 
     app.include_router(_build_router())
 
+    @app.get("/")
+    async def root_redirect():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/ui", status_code=302)
+
     @app.get("/ui")
     async def dashboard_ui():
         from fastapi.responses import FileResponse
@@ -416,58 +421,84 @@ def _build_router():
     @router.get("/api/ohlcv/{symbol}")
     async def get_ohlcv(symbol: str, days: int = 90):
         """OHLCV candlestick data for Lightweight Charts (via yfinance fallback)."""
-        from data.nse_data import NSEDataProvider
-        from datetime import datetime, timedelta
-        import asyncio
+        try:
+            import yfinance as yf
+            import pandas as pd
+            from datetime import datetime, timedelta
 
-        provider = NSEDataProvider()
-        to_d = datetime.now().strftime("%Y-%m-%d")
-        from_d = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            ticker = symbol.upper()
+            # Try NSE suffix first, fallback to BSE
+            for suffix in [".NS", ".BO", ""]:
+                try:
+                    df = yf.download(
+                        f"{ticker}{suffix}",
+                        period=f"{days}d",
+                        interval="1d",
+                        auto_adjust=True,
+                        progress=False,
+                    )
+                    if not df.empty:
+                        break
+                except Exception:
+                    continue
 
-        loop = asyncio.get_event_loop()
-        df = await loop.run_in_executor(
-            None, provider.get_equity_ohlcv, symbol.upper(), from_d, to_d
-        )
-        if df.empty:
-            raise HTTPException(status_code=404, detail=f"No data for {symbol}")
+            if df is None or df.empty:
+                return {"symbol": ticker, "candles": [], "error": "No data available"}
 
-        candles = []
-        for _, row in df.iterrows():
-            ts = int(row["date"].timestamp()) if hasattr(row["date"], "timestamp") else int(row["date"])
-            candles.append({
-                "time": ts,
-                "open": round(float(row["open"]), 2),
-                "high": round(float(row["high"]), 2),
-                "low": round(float(row["low"]), 2),
-                "close": round(float(row["close"]), 2),
-                "volume": int(row["volume"]),
-            })
-        return {"symbol": symbol.upper(), "candles": candles}
+            # Flatten MultiIndex columns if present
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [col[0].lower() for col in df.columns]
+            else:
+                df.columns = [c.lower() for c in df.columns]
+
+            candles = []
+            for ts, row in df.iterrows():
+                try:
+                    t = int(ts.timestamp())
+                    candles.append({
+                        "time": t,
+                        "open": round(float(row.get("open", 0)), 2),
+                        "high": round(float(row.get("high", 0)), 2),
+                        "low": round(float(row.get("low", 0)), 2),
+                        "close": round(float(row.get("close", 0)), 2),
+                        "volume": int(row.get("volume", 0)),
+                    })
+                except Exception:
+                    continue
+            return {"symbol": ticker, "candles": candles}
+        except Exception as e:
+            log.warning("ohlcv.error", symbol=symbol, error=str(e))
+            return {"symbol": symbol.upper(), "candles": [], "error": str(e)}
+
+    async def _redis_get(key: str):
+        """Safely get a Redis key; returns None if Redis is unavailable."""
+        try:
+            import redis.asyncio as aioredis
+            import json as _json
+            r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+            raw = await r.get(key)
+            await r.aclose()
+            return _json.loads(raw) if raw else None
+        except Exception:
+            return None
 
     @router.get("/api/ai/signals")
     async def get_ai_signals():
         """Latest AI options signals from background analysis."""
-        import redis.asyncio as aioredis
-        import json as _json
-        r = await aioredis.from_url(settings.redis_url, decode_responses=True)
-        data = await r.get("ai:options:latest")
+        data = await _redis_get("ai:options:latest")
         if data:
-            return _json.loads(data)
-        return {"signals": [], "message": "AI analysis runs every 30 min during market hours"}
+            return data
+        return {"signals": [], "message": "AI analysis runs every 30 min during market hours. Connect Redis to persist signals."}
 
     @router.get("/api/dashboard")
     async def get_dashboard_data():
         """Aggregated data for the UI dashboard."""
-        import redis.asyncio as aioredis
-        import json as _json
-        r = await aioredis.from_url(settings.redis_url, decode_responses=True)
-
         results = {}
 
-        # Market context — use cache or fetch live
-        ctx_raw = await r.get("market:context")
-        if ctx_raw:
-            results["market_context"] = _json.loads(ctx_raw)
+        # Market context — try Redis cache first, then live fetch
+        ctx_cached = await _redis_get("market:context")
+        if ctx_cached:
+            results["market_context"] = ctx_cached
         else:
             try:
                 from intelligence.market_context import MarketContextTracker
@@ -483,16 +514,15 @@ def _build_router():
                     "usdinr": ctx.usdinr, "crude_oil_usd": ctx.crude_oil_usd,
                     "summary": tracker.summarize(ctx),
                 }
-            except Exception:
+            except Exception as e:
+                log.warning("dashboard.market_context.error", error=str(e))
                 results["market_context"] = {}
 
         # AI signals
-        ai_raw = await r.get("ai:options:latest")
-        results["ai_signals"] = _json.loads(ai_raw) if ai_raw else {"signals": []}
+        results["ai_signals"] = await _redis_get("ai:options:latest") or {"signals": []}
 
         # Scanner picks
-        scan_raw = await r.get("scanner:latest")
-        results["scanner"] = _json.loads(scan_raw) if scan_raw else {}
+        results["scanner"] = await _redis_get("scanner:latest") or {}
 
         return results
 
