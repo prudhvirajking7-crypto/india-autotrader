@@ -81,6 +81,28 @@ def create_app() -> FastAPI:
         from pathlib import Path
         return FileResponse(Path(__file__).parent.parent / "static" / "index.html")
 
+    @app.get("/debug/ai")
+    async def debug_ai():
+        """Debug: test OpenRouter connectivity from Vercel."""
+        import os, traceback
+        key = settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        result = {"key_set": bool(key), "key_prefix": key[:12] + "…" if key else "MISSING"}
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=key or "missing")
+            resp = await client.chat.completions.create(
+                model="openai/gpt-oss-20b:free",
+                messages=[{"role": "user", "content": 'Reply: {"ok":true}'}],
+                max_tokens=20, timeout=20,
+            )
+            result["status"] = "ok"
+            result["response"] = resp.choices[0].message.content
+        except Exception as e:
+            result["status"] = "error"
+            result["error"] = str(e)
+            result["traceback"] = traceback.format_exc()[-800:]
+        return result
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         log.error("unhandled_exception", path=request.url.path, error=str(exc))
