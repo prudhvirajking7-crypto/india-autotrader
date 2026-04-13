@@ -1081,11 +1081,11 @@ async function triggerAI() {
     const res = await fetch('/api/ai/run', { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    if (data.error && (!data.signals || data.signals.length === 0)) throw new Error(data.error);
+    cacheSet('ai_signals', data);   // persist across auto-refreshes
     renderAISignals(data);
   } catch (e) {
-    if (body) body.innerHTML = `<div class="error-state" role="alert">AI error: ${esc(e.message)}</div>`;
-    if (btn) { btn.disabled = false; btn.textContent = '⚡ Run AI Now'; }
+    if (body) body.innerHTML = `<div class="error-state" role="alert">AI error: ${esc(e.message)}<br><button onclick="triggerAI()" style="margin-top:10px;padding:6px 16px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;">Retry</button></div>`;
   }
 }
 
@@ -1096,46 +1096,76 @@ async function triggerScanner() {
     const res = await fetch('/api/scanner/run', { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    cacheSet('scanner_picks', data); // persist across auto-refreshes
     renderScanner(data);
   } catch (e) {
     if (body) body.innerHTML = `<div class="error-state" role="alert">Scanner error: ${esc(e.message)}</div>`;
   }
 }
 
+/* ── Session cache helpers (survive 30s auto-refresh, cleared on tab close) ── */
+const CACHE_TTL = 45 * 60 * 1000; // 45 minutes
+
+function cacheSet(key, data) {
+  try { sessionStorage.setItem(key, JSON.stringify({ data, ts: Date.now() })); } catch (_) {}
+}
+function cacheGet(key) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw);
+    if (Date.now() - ts > CACHE_TTL) { sessionStorage.removeItem(key); return null; }
+    return data;
+  } catch (_) { return null; }
+}
+
 /* ── Main data load ────────────────────────────────────────────────── */
 async function loadDashboard() {
-  // Market context + AI signals + scanner via /api/dashboard (single call)
+  // 1. Market context — always refresh live (lightweight yfinance call)
   try {
-    const dash = await fetchJSON('/api/dashboard');
+    const ctx = await fetchJSON('/api/market-context');
+    if (ctx && ctx.bias) renderMarketContext(ctx);
+  } catch (e) {
+    showError('mc-bias', e.message);
+  }
 
-    if (dash.market_context) renderMarketContext(dash.market_context);
-    if (dash.ai_signals)    renderAISignals(dash.ai_signals);
-    if (dash.scanner)       renderScanner(dash.scanner);
-  } catch (err) {
-    // Fallback: individual calls
-    try {
-      const ctx = await fetchJSON('/intelligence/context');
-      renderMarketContext(ctx);
-    } catch (e) {
-      showError('mc-bias', e.message);
-    }
-
+  // 2. AI signals — use session cache; only show button if truly empty
+  const cachedAI = cacheGet('ai_signals');
+  if (cachedAI) {
+    renderAISignals(cachedAI);
+  } else {
     try {
       const ai = await fetchJSON('/api/ai/signals');
-      renderAISignals(ai);
+      if (ai.signals && ai.signals.length > 0) {
+        cacheSet('ai_signals', ai);
+        renderAISignals(ai);
+      } else {
+        renderAISignals({ signals: [] }); // shows Run AI Now button
+      }
     } catch (e) {
       showError('ai-signals-body', e.message);
     }
+  }
 
+  // 3. Scanner — use session cache; only show button if truly empty
+  const cachedScan = cacheGet('scanner_picks');
+  if (cachedScan) {
+    renderScanner(cachedScan);
+  } else {
     try {
-      const scan = await fetchJSON('/scanner/latest');
-      renderScanner(scan);
+      const dash = await fetchJSON('/api/dashboard');
+      if (dash.scanner && (dash.scanner.top_picks || dash.scanner.picks || []).length > 0) {
+        cacheSet('scanner_picks', dash.scanner);
+        renderScanner(dash.scanner);
+      } else {
+        renderScanner({}); // shows Scan Now button
+      }
     } catch (e) {
-      showError('scanner-body', e.message);
+      renderScanner({});
     }
   }
 
-  // Positions always fetched separately
+  // 4. Positions always fetched separately
   try {
     const pos = await fetchJSON('/positions');
     renderPositions(pos);

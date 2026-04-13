@@ -717,39 +717,128 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
             return data
         return {"signals": [], "message": "AI analysis runs every 30 min during market hours. Connect Redis to persist signals."}
 
+    @router.get("/api/market-context")
+    async def get_market_context():
+        """Live market context via yfinance — no heavy imports needed."""
+        import asyncio
+
+        def _fetch():
+            import yfinance as yf
+            import pandas as pd
+
+            tickers = {
+                "nifty":    "^NSEI",
+                "vix":      "^INDIAVIX",
+                "sensex":   "^BSESN",
+                "sp500":    "^GSPC",
+                "nasdaq":   "^IXIC",
+                "usdinr":   "INR=X",
+                "crude":    "CL=F",
+                "giftnifty":"GC=F",   # gold as proxy if gift nifty unavailable
+            }
+
+            def _safe_pct(df, col="close"):
+                try:
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = [c[0].lower() for c in df.columns]
+                    else:
+                        df.columns = [c.lower() for c in df.columns]
+                    s = df[col].dropna()
+                    if len(s) < 2: return 0.0, float(s.iloc[-1]) if len(s) else 0.0
+                    last, prev = float(s.iloc[-1]), float(s.iloc[-2])
+                    return round((last - prev) / prev * 100, 2), round(last, 2)
+                except Exception:
+                    return 0.0, 0.0
+
+            results = {}
+            for name, sym in tickers.items():
+                try:
+                    df = yf.download(sym, period="5d", interval="1d",
+                                     auto_adjust=True, progress=False)
+                    pct, last = _safe_pct(df)
+                    results[name] = {"last": last, "chg_pct": pct}
+                except Exception:
+                    results[name] = {"last": 0.0, "chg_pct": 0.0}
+
+            n = results.get("nifty", {})
+            v = results.get("vix",   {})
+            sp = results.get("sp500", {})
+            nq = results.get("nasdaq", {})
+            fx = results.get("usdinr", {})
+            cl = results.get("crude",  {})
+
+            vix_val = v.get("last", 15.0)
+            n_chg   = n.get("chg_pct", 0.0)
+            sp_chg  = sp.get("chg_pct", 0.0)
+
+            # Simple bias
+            bull_pts = sum([
+                n_chg > 0.3,
+                vix_val < 15,
+                sp_chg > 0.2,
+                nq.get("chg_pct", 0) > 0.2,
+            ])
+            bear_pts = sum([
+                n_chg < -0.3,
+                vix_val > 20,
+                sp_chg < -0.2,
+            ])
+            bias = "BULLISH" if bull_pts >= 3 else "BEARISH" if bear_pts >= 2 else "NEUTRAL"
+
+            return {
+                "bias": bias,
+                "nifty_last": n.get("last", 0),
+                "nifty_chg_pct": n_chg,
+                "india_vix": round(vix_val, 1),
+                "sensex_chg_pct": results.get("sensex", {}).get("chg_pct", 0),
+                "sp500_change_pct": sp_chg,
+                "nasdaq_change_pct": nq.get("chg_pct", 0),
+                "usdinr": fx.get("last", 0),
+                "crude_oil_usd": cl.get("last", 0),
+                "gift_nifty_change_pct": n_chg,   # best proxy without direct feed
+                "fii_net_crore": None,
+                "dii_net_crore": None,
+                "score": round((bull_pts - bear_pts) / 4.0, 2),
+                "summary": (
+                    f"NIFTY {n.get('last',0):.0f} ({n_chg:+.2f}%) | "
+                    f"VIX {vix_val:.1f} | "
+                    f"S&P {sp_chg:+.2f}% | "
+                    f"USD/INR {fx.get('last',0):.2f} | "
+                    f"Crude ${cl.get('last',0):.1f}"
+                ),
+            }
+
+        try:
+            loop = asyncio.get_event_loop()
+            ctx = await loop.run_in_executor(None, _fetch)
+            return ctx
+        except Exception as e:
+            log.warning("market_context.error", error=str(e))
+            return {"bias": "NEUTRAL", "summary": "Market data unavailable", "error": str(e)}
+
     @router.get("/api/dashboard")
     async def get_dashboard_data():
         """Aggregated data for the UI dashboard."""
+        import asyncio
         results = {}
 
-        # Market context — try Redis cache first, then live fetch
-        ctx_cached = await _redis_get("market:context")
-        if ctx_cached:
-            results["market_context"] = ctx_cached
-        else:
+        # Market context — fast yfinance fetch (no heavy imports)
+        async def _ctx():
             try:
-                from intelligence.market_context import MarketContextTracker
-                tracker = MarketContextTracker()
-                ctx = await tracker.get_context()
-                results["market_context"] = {
-                    "bias": ctx.market_bias, "score": ctx.context_score,
-                    "india_vix": ctx.india_vix,
-                    "gift_nifty_change_pct": ctx.gift_nifty_change_pct,
-                    "sp500_change_pct": ctx.sp500_change_pct,
-                    "nasdaq_change_pct": ctx.nasdaq_change_pct,
-                    "fii_net_crore": ctx.fii_net_crore, "dii_net_crore": ctx.dii_net_crore,
-                    "usdinr": ctx.usdinr, "crude_oil_usd": ctx.crude_oil_usd,
-                    "summary": tracker.summarize(ctx),
-                }
-            except Exception as e:
-                log.warning("dashboard.market_context.error", error=str(e))
-                results["market_context"] = {}
+                return await get_market_context()
+            except Exception:
+                return {}
 
-        # AI signals
-        results["ai_signals"] = await _redis_get("ai:options:latest") or {"signals": []}
+        # Run market context fetch concurrently with Redis lookups
+        ctx_task = asyncio.create_task(_ctx())
 
-        # Scanner picks
-        results["scanner"] = await _redis_get("scanner:latest") or {}
+        # AI signals and scanner from Redis (instant if available)
+        ai_data  = await _redis_get("ai:options:latest") or {"signals": []}
+        scan_data = await _redis_get("scanner:latest") or {}
+
+        results["market_context"] = await ctx_task
+        results["ai_signals"]     = ai_data
+        results["scanner"]        = scan_data
 
         return results
 
