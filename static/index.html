@@ -1074,23 +1074,32 @@ function showError(containerId, msg) {
 
 async function triggerAI() {
   const btn = document.getElementById('run-ai-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
+  const body = document.getElementById('ai-signals-body');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Analysing… (up to 45s)'; }
+  if (body) body.innerHTML = '<div class="empty-state"><div class="empty-msg">🤖 AI is analysing the market…</div></div>';
   try {
-    await fetch('/api/ai/run', { method: 'POST' });
-    if (btn) btn.textContent = '✅ Started! Refreshing in 30s…';
-    setTimeout(() => loadDashboard(), 30000);
+    const res = await fetch('/api/ai/run', { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderAISignals(data);
   } catch (e) {
+    if (body) body.innerHTML = `<div class="error-state" role="alert">AI error: ${esc(e.message)}</div>`;
     if (btn) { btn.disabled = false; btn.textContent = '⚡ Run AI Now'; }
   }
 }
 
 async function triggerScanner() {
+  const body = document.getElementById('scanner-body');
+  if (body) body.innerHTML = '<div class="empty-state"><div class="empty-msg">🔍 Scanning 10 NSE symbols…</div></div>';
   try {
-    await fetch('/api/scanner/run', { method: 'POST' });
-    const sb = document.getElementById('scanner-body');
-    if (sb) sb.innerHTML = '<div class="empty-state"><div class="empty-msg">⏳ Scanning… refreshing in 30s</div></div>';
-    setTimeout(() => loadDashboard(), 30000);
-  } catch (e) { /* silent */ }
+    const res = await fetch('/api/scanner/run', { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderScanner(data);
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="error-state" role="alert">Scanner error: ${esc(e.message)}</div>`;
+  }
 }
 
 /* ── Main data load ────────────────────────────────────────────────── */

@@ -425,47 +425,133 @@ def _build_router():
             return {"positions": [], "note": f"Broker unavailable: {e}"}
 
     @router.post("/api/ai/run")
-    async def run_ai_analysis(background_tasks: BackgroundTasks):
-        """Trigger on-demand AI options analysis (runs in background)."""
-        async def _run():
+    async def run_ai_analysis():
+        """Synchronous on-demand AI options analysis — returns signals directly."""
+        import time, json as _json
+        try:
+            from intelligence.ai_analyst import AIOptionsAnalyst
+            from intelligence.market_context import MarketContextTracker
+            import asyncio
+
+            # Gather market context
             try:
-                from intelligence.ai_analyst import AIOptionsAnalyst, run_ai_analysis_and_notify
-                await run_ai_analysis_and_notify()
-                log.info("ai.on_demand.complete")
-            except Exception as e:
-                log.error("ai.on_demand.error", error=str(e))
-        background_tasks.add_task(_run)
-        return {"status": "started", "message": "AI analysis triggered. Check /api/ai/signals in ~60s."}
+                tracker = MarketContextTracker()
+                ctx = await tracker.get_context()
+                market_ctx = {
+                    "bias": ctx.market_bias, "india_vix": ctx.india_vix,
+                    "gift_nifty_change_pct": ctx.gift_nifty_change_pct,
+                    "usdinr": ctx.usdinr, "summary": tracker.summarize(ctx),
+                }
+            except Exception:
+                market_ctx = {"bias": "NEUTRAL", "summary": "Market context unavailable"}
+
+            # Run AI analysis
+            analyst = AIOptionsAnalyst()
+            signals = await analyst.analyze(market_ctx=market_ctx, scanner_picks=[])
+
+            result = {
+                "signals": [s.__dict__ if hasattr(s, '__dict__') else s for s in (signals or [])],
+                "generated_at": int(time.time()),
+                "model": "openrouter",
+                "market_ctx": market_ctx,
+            }
+
+            # Cache to Redis if available
+            try:
+                import redis.asyncio as aioredis
+                r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+                await r.setex("ai:options:latest", 2700, _json.dumps(result))
+                await r.aclose()
+            except Exception:
+                pass
+
+            log.info("ai.on_demand.complete", signals=len(signals or []))
+            return result
+
+        except Exception as e:
+            log.error("ai.on_demand.error", error=str(e))
+            return {"signals": [], "error": str(e), "generated_at": int(time.time())}
 
     @router.post("/api/scanner/run")
-    async def run_scanner_now(background_tasks: BackgroundTasks):
-        """Trigger on-demand scanner across top NSE symbols."""
-        async def _run():
-            try:
-                import asyncio
-                from scanner.stock_scanner import StockScanner
-                scanner = StockScanner()
-                symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
-                           "SBIN", "BHARTIARTL", "KOTAKBANK", "WIPRO", "AXISBANK"]
-                loop = asyncio.get_event_loop()
-                picks = await loop.run_in_executor(None, scanner.scan, symbols)
-                import json as _json
-                import time
-                result = {"picks": [p.__dict__ if hasattr(p, '__dict__') else p for p in (picks or [])],
-                          "ts": int(time.time()), "symbols_scanned": len(symbols)}
-                # Save to Redis if available
+    async def run_scanner_now():
+        """Synchronous on-demand scanner — returns picks directly using yfinance."""
+        import time
+        import asyncio
+
+        WATCHLIST = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+                     "SBIN", "BHARTIARTL", "KOTAKBANK", "WIPRO", "AXISBANK"]
+
+        def _quick_scan():
+            import yfinance as yf
+            import pandas as pd
+            picks = []
+            for sym in WATCHLIST:
                 try:
-                    import redis.asyncio as aioredis
-                    r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
-                    await r.setex("scanner:latest", 900, _json.dumps(result))
-                    await r.aclose()
+                    df = yf.download(f"{sym}.NS", period="60d", interval="1d",
+                                     auto_adjust=True, progress=False)
+                    if df.empty or len(df) < 20:
+                        continue
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = [c[0].lower() for c in df.columns]
+                    else:
+                        df.columns = [c.lower() for c in df.columns]
+
+                    close = df["close"]
+                    sma20 = close.rolling(20).mean().iloc[-1]
+                    sma5  = close.rolling(5).mean().iloc[-1]
+                    last  = close.iloc[-1]
+                    prev  = close.iloc[-2]
+                    vol   = df["volume"].iloc[-1]
+                    avg_vol = df["volume"].rolling(20).mean().iloc[-1]
+
+                    delta = close.diff()
+                    gain = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
+                    loss = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
+                    rsi = float(100 - 100 / (1 + gain.iloc[-1] / (loss.iloc[-1] or 1e-9)))
+
+                    chg_pct = round((last - prev) / prev * 100, 2)
+                    vol_surge = round(vol / avg_vol, 1) if avg_vol > 0 else 1.0
+
+                    action = "NEUTRAL"
+                    score  = 0.0
+                    if last > sma20 and sma5 > sma20 and rsi < 70:
+                        action = "BUY"; score = round(min(rsi / 100 + vol_surge * 0.1, 1.0), 2)
+                    elif last < sma20 and sma5 < sma20 and rsi > 30:
+                        action = "SELL"; score = round(-min((100 - rsi) / 100 + vol_surge * 0.1, 1.0), 2)
+
+                    picks.append({
+                        "symbol": sym, "action": action, "score": score,
+                        "ltp": round(float(last), 2), "change_pct": chg_pct,
+                        "rsi": round(rsi, 1), "vol_surge": vol_surge,
+                        "above_sma20": bool(last > sma20),
+                        "wyckoff_phase": "Markup" if action == "BUY" else "Markdown" if action == "SELL" else "Distribution",
+                        "breakout_type": "Volume Surge" if vol_surge > 1.5 else "",
+                    })
                 except Exception:
-                    pass
-                log.info("scanner.on_demand.complete", picks=len(picks or []))
-            except Exception as e:
-                log.error("scanner.on_demand.error", error=str(e))
-        background_tasks.add_task(_run)
-        return {"status": "started", "message": "Scanner triggered. Check /api/dashboard in ~30s."}
+                    continue
+            picks.sort(key=lambda p: abs(p["score"]), reverse=True)
+            return picks
+
+        try:
+            loop = asyncio.get_event_loop()
+            picks = await loop.run_in_executor(None, _quick_scan)
+            result = {"top_picks": picks, "picks": picks,
+                      "scanned_at": int(time.time()), "symbols_scanned": len(WATCHLIST)}
+
+            # Cache to Redis if available
+            try:
+                import redis.asyncio as aioredis, json as _j
+                r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+                await r.setex("scanner:latest", 900, _j.dumps(result))
+                await r.aclose()
+            except Exception:
+                pass
+
+            log.info("scanner.on_demand.complete", picks=len(picks))
+            return result
+        except Exception as e:
+            log.error("scanner.on_demand.error", error=str(e))
+            return {"top_picks": [], "picks": [], "error": str(e), "scanned_at": int(time.time())}
 
     @router.get("/api/ohlcv/{symbol}")
     async def get_ohlcv(symbol: str, days: int = 90):
