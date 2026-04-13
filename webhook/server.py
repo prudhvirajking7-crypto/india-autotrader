@@ -426,51 +426,101 @@ def _build_router():
 
     @router.post("/api/ai/run")
     async def run_ai_analysis():
-        """Synchronous on-demand AI options analysis — returns signals directly."""
+        """Single-turn AI options analysis — fast enough for Vercel's 60s limit."""
         import time, json as _json
-        try:
-            from intelligence.ai_analyst import AIOptionsAnalyst
-            from intelligence.market_context import MarketContextTracker
-            import asyncio
 
-            # Gather market context
+        FREE_MODELS = [
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemma-3-27b-it:free",
+            "mistralai/mistral-7b-instruct:free",
+        ]
+
+        # Quick market context via yfinance
+        def _get_quick_context():
             try:
-                tracker = MarketContextTracker()
-                ctx = await tracker.get_context()
-                market_ctx = {
-                    "bias": ctx.market_bias, "india_vix": ctx.india_vix,
-                    "gift_nifty_change_pct": ctx.gift_nifty_change_pct,
-                    "usdinr": ctx.usdinr, "summary": tracker.summarize(ctx),
+                import yfinance as yf
+                nifty = yf.download("^NSEI", period="5d", interval="1d", auto_adjust=True, progress=False)
+                vix   = yf.download("^INDIAVIX", period="2d", interval="1d", auto_adjust=True, progress=False)
+                import pandas as pd
+                if isinstance(nifty.columns, pd.MultiIndex):
+                    nifty.columns = [c[0].lower() for c in nifty.columns]
+                if isinstance(vix.columns, pd.MultiIndex):
+                    vix.columns = [c[0].lower() for c in vix.columns]
+                n_last = float(nifty["close"].iloc[-1]) if not nifty.empty else 0
+                n_prev = float(nifty["close"].iloc[-2]) if len(nifty) > 1 else n_last
+                n_chg  = round((n_last - n_prev) / n_prev * 100, 2) if n_prev else 0
+                v_last = float(vix["close"].iloc[-1]) if not vix.empty else 15.0
+                return {"nifty_last": round(n_last, 0), "nifty_chg_pct": n_chg, "india_vix": round(v_last, 1)}
+            except Exception:
+                return {"nifty_last": 0, "nifty_chg_pct": 0, "india_vix": 15.0}
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+        ctx = await loop.run_in_executor(None, _get_quick_context)
+
+        prompt = f"""You are an expert NSE options trader. Based on today's market:
+
+NIFTY: {ctx['nifty_last']} ({ctx['nifty_chg_pct']:+.2f}% today)
+India VIX: {ctx['india_vix']}
+
+Analyse the market and suggest 1-2 high-conviction options trades for this week.
+Reply ONLY with valid JSON (no markdown, no explanation):
+
+{{"signals": [{{"symbol": "NIFTY", "action": "BUY_CE", "strike": 24000, "expiry": "weekly", "premium_est": 150, "target_pct": 40, "sl_pct": 20, "confidence": 0.72, "rationale": "brief reason", "risk_factors": ["VIX elevated"]}}]}}
+
+action must be one of: BUY_CE, BUY_PE, SELL_CE, SELL_PE, HOLD
+Use HOLD with empty signals if market is unclear. Max 2 signals."""
+
+        last_error = "No models available"
+        for model in FREE_MODELS:
+            try:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=settings.openrouter_api_key or "",
+                )
+                resp = await client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=800,
+                    timeout=28,
+                )
+                content = resp.choices[0].message.content or ""
+
+                # Extract JSON
+                import re
+                m = re.search(r'\{.*\}', content, re.DOTALL)
+                if not m:
+                    raise ValueError("No JSON in response")
+                parsed = _json.loads(m.group())
+                sigs = parsed.get("signals", [])
+
+                result = {
+                    "signals": sigs,
+                    "generated_at": int(time.time()),
+                    "model": model.split("/")[-1].replace(":free", ""),
+                    "nifty": ctx,
                 }
-            except Exception:
-                market_ctx = {"bias": "NEUTRAL", "summary": "Market context unavailable"}
 
-            # Run AI analysis
-            analyst = AIOptionsAnalyst()
-            signals = await analyst.analyze(context_data=market_ctx)
+                # Cache to Redis if available
+                try:
+                    import redis.asyncio as aioredis
+                    r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+                    await r.setex("ai:options:latest", 2700, _json.dumps(result))
+                    await r.aclose()
+                except Exception:
+                    pass
 
-            result = {
-                "signals": [s.__dict__ if hasattr(s, '__dict__') else s for s in (signals or [])],
-                "generated_at": int(time.time()),
-                "model": "openrouter",
-                "market_ctx": market_ctx,
-            }
+                log.info("ai.on_demand.complete", signals=len(sigs), model=model)
+                return result
 
-            # Cache to Redis if available
-            try:
-                import redis.asyncio as aioredis
-                r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
-                await r.setex("ai:options:latest", 2700, _json.dumps(result))
-                await r.aclose()
-            except Exception:
-                pass
+            except Exception as e:
+                last_error = str(e)
+                log.warning("ai.model_failed", model=model, error=last_error)
+                continue
 
-            log.info("ai.on_demand.complete", signals=len(signals or []))
-            return result
-
-        except Exception as e:
-            log.error("ai.on_demand.error", error=str(e))
-            return {"signals": [], "error": str(e), "generated_at": int(time.time())}
+        return {"signals": [], "error": last_error, "generated_at": int(time.time())}
 
     @router.post("/api/scanner/run")
     async def run_scanner_now():
