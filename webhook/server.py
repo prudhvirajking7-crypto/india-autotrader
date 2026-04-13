@@ -37,15 +37,21 @@ def _jsonify(obj):
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     log.info("autotrader.startup", paper=settings.paper_trading, broker=settings.active_broker)
 
-    # Start intelligence scheduler
-    from intelligence.scheduler import build_scheduler
-    scheduler = build_scheduler()
-    scheduler.start()
-    log.info("autotrader.scheduler.started")
+    scheduler = None
+    if not settings.is_production:
+        # Scheduler only runs in local/dev — serverless functions have no persistent process
+        try:
+            from intelligence.scheduler import build_scheduler
+            scheduler = build_scheduler()
+            scheduler.start()
+            log.info("autotrader.scheduler.started")
+        except Exception as e:
+            log.warning("autotrader.scheduler.skipped", reason=str(e))
 
     yield
 
-    scheduler.shutdown(wait=False)
+    if scheduler:
+        scheduler.shutdown(wait=False)
     log.info("autotrader.shutdown")
 
 
