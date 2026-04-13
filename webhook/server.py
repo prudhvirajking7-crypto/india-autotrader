@@ -447,7 +447,7 @@ def _build_router():
 
             # Run AI analysis
             analyst = AIOptionsAnalyst()
-            signals = await analyst.analyze(market_ctx=market_ctx, scanner_picks=[])
+            signals = await analyst.analyze(context_data=market_ctx)
 
             result = {
                 "signals": [s.__dict__ if hasattr(s, '__dict__') else s for s in (signals or [])],
