@@ -83,24 +83,26 @@ def create_app() -> FastAPI:
 
     @app.get("/debug/ai")
     async def debug_ai():
-        """Debug: test OpenRouter connectivity from Vercel."""
-        import os, traceback
+        """Debug: test OpenRouter connectivity via httpx."""
+        import os, traceback, httpx
         key = settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
         result = {"key_set": bool(key), "key_prefix": key[:12] + "…" if key else "MISSING"}
         try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=key or "missing")
-            resp = await client.chat.completions.create(
-                model="openai/gpt-oss-20b:free",
-                messages=[{"role": "user", "content": 'Reply: {"ok":true}'}],
-                max_tokens=20, timeout=20,
-            )
-            result["status"] = "ok"
-            result["response"] = resp.choices[0].message.content
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"model": "openai/gpt-oss-20b:free",
+                          "messages": [{"role": "user", "content": 'Reply: {"ok":true}'}],
+                          "max_tokens": 20},
+                )
+            result["status_code"] = resp.status_code
+            result["response"] = resp.text[:300]
+            result["status"] = "ok" if resp.status_code == 200 else "http_error"
         except Exception as e:
             result["status"] = "error"
             result["error"] = str(e)
-            result["traceback"] = traceback.format_exc()[-800:]
+            result["traceback"] = traceback.format_exc()[-600:]
         return result
 
     @app.exception_handler(Exception)
@@ -495,54 +497,70 @@ Reply ONLY with valid JSON (no markdown, no explanation):
 action must be one of: BUY_CE, BUY_PE, SELL_CE, SELL_PE, HOLD
 Use HOLD with empty signals if market is unclear. Max 2 signals."""
 
+        import re, httpx
+        api_key = settings.openrouter_api_key or ""
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://india-autotrader.vercel.app",
+            "X-Title": "India AutoTrader",
+        }
+
         last_error = "No models available"
-        for model in FREE_MODELS:
-            try:
-                from openai import AsyncOpenAI
-                client = AsyncOpenAI(
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=settings.openrouter_api_key or "",
-                )
-                resp = await client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                    max_tokens=800,
-                    timeout=28,
-                )
-                content = resp.choices[0].message.content or ""
-
-                # Extract JSON
-                import re
-                m = re.search(r'\{.*\}', content, re.DOTALL)
-                if not m:
-                    raise ValueError("No JSON in response")
-                parsed = _json.loads(m.group())
-                sigs = parsed.get("signals", [])
-
-                result = {
-                    "signals": sigs,
-                    "generated_at": int(time.time()),
-                    "model": model.split("/")[-1].replace(":free", ""),
-                    "nifty": ctx,
-                }
-
-                # Cache to Redis if available
+        async with httpx.AsyncClient(timeout=40) as client:
+            for model in FREE_MODELS:
                 try:
-                    import redis.asyncio as aioredis
-                    r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
-                    await r.setex("ai:options:latest", 2700, _json.dumps(result))
-                    await r.aclose()
-                except Exception:
-                    pass
+                    resp = await client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers=headers,
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": 0.3,
+                            "max_tokens": 800,
+                        },
+                    )
+                    if resp.status_code == 429:
+                        log.warning("ai.rate_limited", model=model)
+                        continue
+                    if resp.status_code != 200:
+                        last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                        log.warning("ai.http_error", model=model, error=last_error)
+                        continue
 
-                log.info("ai.on_demand.complete", signals=len(sigs), model=model)
-                return result
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"] or ""
 
-            except Exception as e:
-                last_error = str(e)
-                log.warning("ai.model_failed", model=model, error=last_error)
-                continue
+                    # Extract JSON block
+                    m = re.search(r'\{.*\}', content, re.DOTALL)
+                    if not m:
+                        raise ValueError(f"No JSON in response: {content[:200]}")
+                    parsed = _json.loads(m.group())
+                    sigs = parsed.get("signals", [])
+
+                    result = {
+                        "signals": sigs,
+                        "generated_at": int(time.time()),
+                        "model": model.split("/")[-1].replace(":free", ""),
+                        "nifty": ctx,
+                    }
+
+                    # Cache to Redis if available
+                    try:
+                        import redis.asyncio as aioredis
+                        r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+                        await r.setex("ai:options:latest", 2700, _json.dumps(result))
+                        await r.aclose()
+                    except Exception:
+                        pass
+
+                    log.info("ai.on_demand.complete", signals=len(sigs), model=model)
+                    return result
+
+                except Exception as e:
+                    last_error = str(e)
+                    log.warning("ai.model_failed", model=model, error=last_error)
+                    continue
 
         return {"signals": [], "error": last_error, "generated_at": int(time.time())}
 
