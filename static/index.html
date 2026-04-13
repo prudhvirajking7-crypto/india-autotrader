@@ -917,6 +917,9 @@ function renderAISignals(data) {
       <div class="empty-state" role="status">
         <div class="empty-icon" aria-hidden="true">🤖</div>
         <div class="empty-msg">${esc(data.message || 'No signals yet. AI runs every 30 min during market hours.')}</div>
+        <button id="run-ai-btn" onclick="triggerAI()" style="margin-top:12px;padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">
+          ⚡ Run AI Now
+        </button>
       </div>`;
     return;
   }
@@ -972,6 +975,9 @@ function renderScanner(data) {
       <div class="empty-state" role="status">
         <div class="empty-icon" aria-hidden="true">📡</div>
         <div class="empty-msg">No scanner picks. Scan runs every 15 min from 09:30 IST.</div>
+        <button onclick="triggerScanner()" style="margin-top:12px;padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">
+          🔍 Scan Now
+        </button>
       </div>`;
     return;
   }
@@ -1003,10 +1009,11 @@ function renderPositions(data) {
     `${positions.length} position${positions.length !== 1 ? 's' : ''}`;
 
   if (positions.length === 0) {
+    const msg = data.note || (data.mode === 'paper' ? '📄 Paper trading mode — no live broker positions.' : 'No open positions.');
     body.innerHTML = `
       <div class="empty-state" role="status">
         <div class="empty-icon" aria-hidden="true">📂</div>
-        <div class="empty-msg">No open positions.</div>
+        <div class="empty-msg">${esc(msg)}</div>
       </div>`;
     return;
   }
@@ -1063,6 +1070,27 @@ async function fetchJSON(url) {
 function showError(containerId, msg) {
   document.getElementById(containerId).innerHTML =
     `<div class="error-state" role="alert">Error: ${esc(msg)}</div>`;
+}
+
+async function triggerAI() {
+  const btn = document.getElementById('run-ai-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
+  try {
+    await fetch('/api/ai/run', { method: 'POST' });
+    if (btn) btn.textContent = '✅ Started! Refreshing in 30s…';
+    setTimeout(() => loadDashboard(), 30000);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Run AI Now'; }
+  }
+}
+
+async function triggerScanner() {
+  try {
+    await fetch('/api/scanner/run', { method: 'POST' });
+    const sb = document.getElementById('scanner-body');
+    if (sb) sb.innerHTML = '<div class="empty-state"><div class="empty-msg">⏳ Scanning… refreshing in 30s</div></div>';
+    setTimeout(() => loadDashboard(), 30000);
+  } catch (e) { /* silent */ }
 }
 
 /* ── Main data load ────────────────────────────────────────────────── */

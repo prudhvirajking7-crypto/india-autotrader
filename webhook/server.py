@@ -401,22 +401,71 @@ def _build_router():
 
     @router.get("/positions")
     async def get_positions():
-        from brokers.factory import get_broker
-        broker = get_broker()
-        positions = broker.get_positions()
-        return {
-            "positions": [
-                {
-                    "symbol": p.symbol,
-                    "exchange": p.exchange,
-                    "qty": p.qty,
-                    "avg_price": p.avg_price,
-                    "ltp": p.ltp,
-                    "pnl": p.pnl,
-                }
-                for p in positions
-            ]
-        }
+        if settings.paper_trading:
+            return {"positions": [], "mode": "paper", "note": "Paper trading mode — no live broker positions"}
+        try:
+            from brokers.factory import get_broker
+            broker = get_broker()
+            positions = broker.get_positions()
+            return {
+                "positions": [
+                    {
+                        "symbol": p.symbol,
+                        "exchange": p.exchange,
+                        "qty": p.qty,
+                        "avg_price": p.avg_price,
+                        "ltp": p.ltp,
+                        "pnl": p.pnl,
+                    }
+                    for p in positions
+                ]
+            }
+        except Exception as e:
+            log.warning("positions.error", error=str(e))
+            return {"positions": [], "note": f"Broker unavailable: {e}"}
+
+    @router.post("/api/ai/run")
+    async def run_ai_analysis(background_tasks: BackgroundTasks):
+        """Trigger on-demand AI options analysis (runs in background)."""
+        async def _run():
+            try:
+                from intelligence.ai_analyst import AIOptionsAnalyst, run_ai_analysis_and_notify
+                await run_ai_analysis_and_notify()
+                log.info("ai.on_demand.complete")
+            except Exception as e:
+                log.error("ai.on_demand.error", error=str(e))
+        background_tasks.add_task(_run)
+        return {"status": "started", "message": "AI analysis triggered. Check /api/ai/signals in ~60s."}
+
+    @router.post("/api/scanner/run")
+    async def run_scanner_now(background_tasks: BackgroundTasks):
+        """Trigger on-demand scanner across top NSE symbols."""
+        async def _run():
+            try:
+                import asyncio
+                from scanner.stock_scanner import StockScanner
+                scanner = StockScanner()
+                symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+                           "SBIN", "BHARTIARTL", "KOTAKBANK", "WIPRO", "AXISBANK"]
+                loop = asyncio.get_event_loop()
+                picks = await loop.run_in_executor(None, scanner.scan, symbols)
+                import json as _json
+                import time
+                result = {"picks": [p.__dict__ if hasattr(p, '__dict__') else p for p in (picks or [])],
+                          "ts": int(time.time()), "symbols_scanned": len(symbols)}
+                # Save to Redis if available
+                try:
+                    import redis.asyncio as aioredis
+                    r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+                    await r.setex("scanner:latest", 900, _json.dumps(result))
+                    await r.aclose()
+                except Exception:
+                    pass
+                log.info("scanner.on_demand.complete", picks=len(picks or []))
+            except Exception as e:
+                log.error("scanner.on_demand.error", error=str(e))
+        background_tasks.add_task(_run)
+        return {"status": "started", "message": "Scanner triggered. Check /api/dashboard in ~30s."}
 
     @router.get("/api/ohlcv/{symbol}")
     async def get_ohlcv(symbol: str, days: int = 90):
