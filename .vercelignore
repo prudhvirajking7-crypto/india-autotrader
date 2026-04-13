@@ -1,0 +1,17 @@
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.git/
+.env
+tests/
+backtest/
+scripts/
+mcp/
+docker-compose.yml
+Dockerfile
+*.log
+logs/
+.pytest_cache/
+.mypy_cache/
+node_modules/
