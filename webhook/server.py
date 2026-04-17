@@ -441,28 +441,37 @@ def _build_router():
 
     @router.get("/positions")
     async def get_positions():
+        import httpx as _httpx
+        token = await _kite_access_token()
+
+        # Use live Kite positions if token is available
+        if token:
+            try:
+                async with _httpx.AsyncClient(timeout=10) as client:
+                    r = await client.get("https://api.kite.trade/portfolio/positions",
+                                         headers=_kite_headers(token))
+                if r.status_code == 200:
+                    raw = r.json().get("data", {}).get("day", [])
+                    positions = [
+                        {
+                            "symbol": p["tradingsymbol"],
+                            "exchange": p["exchange"],
+                            "qty": p["quantity"],
+                            "avg_price": round(p.get("average_price", 0), 2),
+                            "ltp": round(p.get("last_price", 0), 2),
+                            "pnl": round(p.get("pnl", 0), 2),
+                            "product": p.get("product", ""),
+                        }
+                        for p in raw if p.get("quantity", 0) != 0
+                    ]
+                    return {"positions": positions, "mode": "live", "source": "kite"}
+                log.warning("positions.kite_error", status=r.status_code)
+            except Exception as e:
+                log.warning("positions.kite_error", error=str(e))
+
         if settings.paper_trading:
-            return {"positions": [], "mode": "paper", "note": "Paper trading mode — no live broker positions"}
-        try:
-            from brokers.factory import get_broker
-            broker = get_broker()
-            positions = broker.get_positions()
-            return {
-                "positions": [
-                    {
-                        "symbol": p.symbol,
-                        "exchange": p.exchange,
-                        "qty": p.qty,
-                        "avg_price": p.avg_price,
-                        "ltp": p.ltp,
-                        "pnl": p.pnl,
-                    }
-                    for p in positions
-                ]
-            }
-        except Exception as e:
-            log.warning("positions.error", error=str(e))
-            return {"positions": [], "note": f"Broker unavailable: {e}"}
+            return {"positions": [], "mode": "paper", "note": "Paper trading — connect Zerodha for live positions"}
+        return {"positions": [], "note": "Zerodha not connected. Visit /broker/zerodha/login"}
 
     @router.post("/api/ai/run")
     async def run_ai_analysis():
@@ -739,6 +748,130 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
         except Exception:
             return None
 
+    async def _redis_set(key: str, value, ttl: int = 86400):
+        """Safely set a Redis key with TTL."""
+        try:
+            import redis.asyncio as aioredis, json as _j
+            r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+            await r.setex(key, ttl, _j.dumps(value))
+            await r.aclose()
+            return True
+        except Exception:
+            return False
+
+    async def _kite_access_token() -> str | None:
+        """Get Zerodha access token from Redis (set after OAuth login)."""
+        tok = await _redis_get("zerodha:access_token")
+        return tok if isinstance(tok, str) else None
+
+    def _kite_headers(access_token: str) -> dict:
+        return {
+            "Authorization": f"token {settings.zerodha_api_key}:{access_token}",
+            "X-Kite-Version": "3",
+        }
+
+    # ── Zerodha OAuth endpoints ─────────────────────────────────────────
+
+    @router.get("/broker/zerodha/login")
+    async def zerodha_login():
+        """Redirect browser to Zerodha Kite login page."""
+        from fastapi.responses import RedirectResponse
+        api_key = settings.zerodha_api_key
+        if not api_key:
+            raise HTTPException(status_code=400, detail="ZERODHA_API_KEY not configured")
+        url = f"https://kite.zerodha.com/connect/login?api_key={api_key}&v=3"
+        return RedirectResponse(url)
+
+    @router.get("/broker/zerodha/callback")
+    async def zerodha_callback(request_token: str = "", status: str = "", error: str = ""):
+        """Kite redirects here after login. Exchange request_token for access_token."""
+        from fastapi.responses import HTMLResponse
+        import hashlib, httpx as _httpx
+
+        if status != "success" or not request_token:
+            return HTMLResponse(_broker_page("Login Failed", f"Kite returned: status={status} error={error}", ok=False))
+
+        api_key    = settings.zerodha_api_key or ""
+        api_secret = settings.zerodha_api_secret or ""
+        checksum   = hashlib.sha256(f"{api_key}{request_token}{api_secret}".encode()).hexdigest()
+
+        try:
+            async with _httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://api.kite.trade/session/token",
+                    data={"api_key": api_key, "request_token": request_token, "checksum": checksum},
+                    headers={"X-Kite-Version": "3"},
+                )
+            if resp.status_code != 200:
+                return HTMLResponse(_broker_page("Token Error", f"Kite API error {resp.status_code}: {resp.text[:300]}", ok=False))
+
+            data = resp.json().get("data", {})
+            access_token = data.get("access_token", "")
+            user_name    = data.get("user_name", "")
+            if not access_token:
+                return HTMLResponse(_broker_page("Token Error", "No access_token in response", ok=False))
+
+            # Store in Redis — valid until midnight IST (~midnight UTC+5:30)
+            await _redis_set("zerodha:access_token", access_token, ttl=86400)
+            await _redis_set("zerodha:user_info",
+                             {"user_name": user_name, "login_time": int(time.time())}, ttl=86400)
+
+            log.info("zerodha.oauth.success", user=user_name)
+            return HTMLResponse(_broker_page("Connected!", f"Welcome, {user_name}! Zerodha is now live.", ok=True))
+
+        except Exception as e:
+            log.error("zerodha.callback.error", error=str(e))
+            return HTMLResponse(_broker_page("Error", str(e), ok=False))
+
+    @router.get("/broker/zerodha/status")
+    async def zerodha_status():
+        """Check whether a valid Kite access token is available."""
+        import httpx as _httpx
+        token = await _kite_access_token()
+        if not token:
+            return {"connected": False, "message": "Not logged in. Visit /broker/zerodha/login"}
+
+        # Verify the token is still valid by hitting Kite profile
+        try:
+            async with _httpx.AsyncClient(timeout=8) as client:
+                r = await client.get("https://api.kite.trade/user/profile",
+                                     headers=_kite_headers(token))
+            if r.status_code == 200:
+                info = await _redis_get("zerodha:user_info") or {}
+                return {"connected": True, "user_name": r.json().get("data", {}).get("user_name", ""),
+                        "login_time": info.get("login_time")}
+            return {"connected": False, "message": f"Token expired (HTTP {r.status_code}). Re-login."}
+        except Exception as e:
+            return {"connected": False, "message": str(e)}
+
+    @router.delete("/broker/zerodha/logout")
+    async def zerodha_logout():
+        """Invalidate the stored Kite access token."""
+        import redis.asyncio as aioredis
+        try:
+            r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+            await r.delete("zerodha:access_token", "zerodha:user_info")
+            await r.aclose()
+        except Exception:
+            pass
+        return {"message": "Logged out"}
+
+    def _broker_page(title: str, msg: str, ok: bool) -> str:
+        color = "#3fb950" if ok else "#f85149"
+        icon  = "✅" if ok else "❌"
+        redirect = '<meta http-equiv="refresh" content="3;url=/">' if ok else ""
+        return f"""<!doctype html><html><head><meta charset="utf-8">{redirect}
+        <style>body{{background:#0d1117;color:#e6edf3;font-family:sans-serif;display:flex;
+        align-items:center;justify-content:center;height:100vh;margin:0}}
+        .box{{text-align:center;max-width:400px;padding:40px;background:#161b22;
+        border:1px solid #30363d;border-radius:12px}}
+        h2{{color:{color};margin-bottom:12px}} p{{color:#8b949e;margin-bottom:20px}}
+        a{{color:#58a6ff;text-decoration:none}}</style></head>
+        <body><div class="box"><div style="font-size:48px">{icon}</div>
+        <h2>{title}</h2><p>{msg}</p>
+        {"<p style='color:#8b949e;font-size:0.85rem'>Redirecting to dashboard…</p>" if ok else
+         '<a href="/broker/zerodha/login">↩ Try Again</a>'}</div></body></html>"""
+
     @router.get("/api/ai/signals")
     async def get_ai_signals():
         """Latest AI options signals from background analysis."""
@@ -749,7 +882,7 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
 
     @router.get("/api/market-context")
     async def get_market_context():
-        """Live market context via Yahoo Finance v8 API — no pandas/yfinance needed."""
+        """Live market context — Kite LTP if connected, else Yahoo Finance v8 API."""
         import asyncio, httpx as _httpx
 
         _hdrs  = {"User-Agent": "Mozilla/5.0"}
@@ -786,11 +919,43 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                 return name, 0.0, 0.0
 
         try:
+            # Attempt Kite LTP for Indian indices (zero delay, real-time)
+            kite_token = await _kite_access_token()
+            kite_nifty = kite_vix = kite_sensex = None
+            if kite_token:
+                try:
+                    async with _httpx.AsyncClient(timeout=6) as kc:
+                        kr = await kc.get(
+                            "https://api.kite.trade/quote/ltp",
+                            params={"i": ["NSE:NIFTY 50", "NSE:INDIA VIX", "BSE:SENSEX"]},
+                            headers=_kite_headers(kite_token),
+                        )
+                    if kr.status_code == 200:
+                        kd = kr.json().get("data", {})
+                        kite_nifty  = kd.get("NSE:NIFTY 50",   {}).get("last_price")
+                        kite_vix    = kd.get("NSE:INDIA VIX",  {}).get("last_price")
+                        kite_sensex = kd.get("BSE:SENSEX",     {}).get("last_price")
+                except Exception:
+                    pass
+
             async with _httpx.AsyncClient() as client:
                 tasks = [_fetch_one(client, n, s) for n, s in _ticks.items()]
                 raw = await asyncio.gather(*tasks)
 
             results = {name: {"last": last, "chg_pct": pct} for name, last, pct in raw}
+
+            # Override with real-time Kite values where available
+            if kite_nifty:
+                prev = results.get("nifty", {}).get("last", kite_nifty)
+                results["nifty"]["last"] = kite_nifty
+                results["nifty"]["chg_pct"] = round((kite_nifty - prev) / prev * 100, 2) if prev else 0
+                results["nifty"]["realtime"] = True
+            if kite_vix:
+                results["vix"]["last"] = kite_vix
+                results["vix"]["realtime"] = True
+            if kite_sensex:
+                results["sensex"]["last"] = kite_sensex
+                results["sensex"]["realtime"] = True
 
             n   = results.get("nifty",  {})
             v   = results.get("vix",    {})
@@ -818,6 +983,8 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                 "usdinr": fx.get("last", 0),
                 "crude_oil_usd": cl.get("last", 0),
                 "gift_nifty_change_pct": n_chg,
+                "nifty_realtime": results.get("nifty", {}).get("realtime", False),
+                "vix_realtime":   results.get("vix",   {}).get("realtime", False),
                 "fii_net_crore": None,
                 "dii_net_crore": None,
                 "score": round((bull_pts - bear_pts) / 4.0, 2),

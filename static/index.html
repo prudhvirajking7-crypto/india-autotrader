@@ -557,6 +557,16 @@
     <span class="logo-badge" id="trading-mode" aria-live="polite">Paper</span>
   </div>
   <div class="header-right">
+    <!-- Zerodha broker status pill -->
+    <a id="broker-btn" href="/broker/zerodha/login" target="_blank"
+       style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;
+              font-size:0.75rem;font-weight:600;text-decoration:none;border:1px solid var(--border);
+              background:var(--bg-card-alt);color:var(--text-secondary);cursor:pointer;"
+       aria-label="Zerodha broker connection status"
+       title="Click to connect Zerodha">
+      <span id="broker-dot" style="width:7px;height:7px;border-radius:50%;background:var(--red);flex-shrink:0;"></span>
+      <span id="broker-label">Connect Kite</span>
+    </a>
     <div class="market-status" aria-live="polite">
       <div class="status-dot" id="market-dot" aria-hidden="true"></div>
       <span id="market-status-text">Checking...</span>
@@ -581,13 +591,18 @@
   <section aria-labelledby="market-context-heading">
     <h1 id="market-context-heading" class="section-label">Market Context</h1>
     <div class="grid-6" id="market-metrics">
+      <div class="metric-card" id="mc-nifty">
+        <span class="metric-label">NIFTY 50 <span id="mc-nifty-rt" style="display:none;font-size:0.6rem;background:var(--green-dim);color:var(--green);padding:1px 5px;border-radius:4px;margin-left:4px;">LIVE</span></span>
+        <span class="metric-value skeleton" style="height:28px;width:75%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-nifty-chg">—</span>
+      </div>
       <div class="metric-card" id="mc-bias">
         <span class="metric-label">Market Bias</span>
         <span class="metric-value neutral skeleton" style="height:28px;width:80%;">&nbsp;</span>
         <span class="metric-sub" id="mc-score">Score: —</span>
       </div>
       <div class="metric-card" id="mc-vix">
-        <span class="metric-label">India VIX</span>
+        <span class="metric-label">India VIX <span id="mc-vix-rt" style="display:none;font-size:0.6rem;background:var(--green-dim);color:var(--green);padding:1px 5px;border-radius:4px;margin-left:4px;">LIVE</span></span>
         <span class="metric-value skeleton" style="height:28px;width:60%;">&nbsp;</span>
         <span class="metric-sub" id="mc-vix-sub">—</span>
       </div>
@@ -845,10 +860,20 @@ function esc(str) {
 /* ── Render: Market context ────────────────────────────────────────── */
 function renderMarketContext(ctx) {
   if (!ctx || Object.keys(ctx).length === 0) {
-    // Show stale state if empty
     document.getElementById('mc-bias').querySelector('.metric-value').innerHTML =
       '<span class="bias-chip neutral">No data</span>';
     return;
+  }
+
+  // NIFTY card
+  const niftyEl = document.getElementById('mc-nifty');
+  if (niftyEl && ctx.nifty_last) {
+    niftyEl.querySelector('.metric-value').textContent = Number(ctx.nifty_last).toLocaleString('en-IN', {maximumFractionDigits:0});
+    niftyEl.querySelector('.metric-value').className = `metric-value ${ctx.nifty_chg_pct >= 0 ? 'bullish' : 'bearish'}`;
+    const chgEl = document.getElementById('mc-nifty-chg');
+    if (chgEl) chgEl.textContent = fmtChg(ctx.nifty_chg_pct);
+    const rtBadge = document.getElementById('mc-nifty-rt');
+    if (rtBadge && ctx.nifty_realtime) rtBadge.style.display = 'inline';
   }
 
   const bc = biasClass(ctx.bias || ctx.market_bias || '');
@@ -868,6 +893,8 @@ function renderMarketContext(ctx) {
   vixEl.querySelector('.metric-value').textContent = vix !== undefined ? Number(vix).toFixed(1) : '—';
   vixEl.querySelector('.metric-value').className = `metric-value ${vixClass}`;
   document.getElementById('mc-vix-sub').textContent = vix > 20 ? 'High — sell premium' : vix > 15 ? 'Medium' : 'Low — buy options';
+  const vixRt = document.getElementById('mc-vix-rt');
+  if (vixRt && ctx.vix_realtime) vixRt.style.display = 'inline';
 
   // FII/DII
   const fii = ctx.fii_net_crore;
@@ -1193,6 +1220,32 @@ function startCountdown() {
   }, 1000);
 }
 
+/* ── Broker status ─────────────────────────────────────────────────── */
+function checkBrokerStatus() {
+  fetch('/broker/zerodha/status')
+    .then(r => r.json())
+    .then(data => {
+      const dot   = document.getElementById('broker-dot');
+      const label = document.getElementById('broker-label');
+      const btn   = document.getElementById('broker-btn');
+      if (data.connected) {
+        dot.style.background   = 'var(--green)';
+        dot.style.boxShadow    = '0 0 0 2px var(--green-dim)';
+        label.textContent      = data.user_name ? `Kite: ${data.user_name.split(' ')[0]}` : 'Kite Connected';
+        btn.style.color        = 'var(--green)';
+        btn.style.borderColor  = 'var(--green-dim)';
+        btn.title              = 'Zerodha connected — click to re-login';
+      } else {
+        dot.style.background  = 'var(--red)';
+        label.textContent     = 'Connect Kite';
+        btn.style.color       = 'var(--text-secondary)';
+        btn.style.borderColor = 'var(--border)';
+        btn.title             = 'Connect Zerodha for live data & execution';
+      }
+    })
+    .catch(() => {});
+}
+
 /* ── Init ──────────────────────────────────────────────────────────── */
 (function init() {
   updateClock();
@@ -1200,6 +1253,8 @@ function startCountdown() {
 
   initChart('NSE:RELIANCE');
   loadDashboard().then(() => startCountdown());
+  checkBrokerStatus();
+  setInterval(checkBrokerStatus, 60000); // recheck every minute
 
   // Set mode badge from health endpoint
   fetchJSON('/health').then(h => {
