@@ -591,36 +591,37 @@
   <section aria-labelledby="market-context-heading">
     <h1 id="market-context-heading" class="section-label">Market Context</h1>
     <div class="grid-6" id="market-metrics">
+      <!-- Card 1: NIFTY 50 -->
       <div class="metric-card" id="mc-nifty">
         <span class="metric-label">NIFTY 50 <span id="mc-nifty-rt" style="display:none;font-size:0.6rem;background:var(--green-dim);color:var(--green);padding:1px 5px;border-radius:4px;margin-left:4px;">LIVE</span></span>
         <span class="metric-value skeleton" style="height:28px;width:75%;">&nbsp;</span>
         <span class="metric-sub" id="mc-nifty-chg">—</span>
       </div>
-      <div class="metric-card" id="mc-bias">
-        <span class="metric-label">Market Bias</span>
-        <span class="metric-value neutral skeleton" style="height:28px;width:80%;">&nbsp;</span>
-        <span class="metric-sub" id="mc-score">Score: —</span>
-      </div>
+      <!-- Card 2: VIX -->
       <div class="metric-card" id="mc-vix">
         <span class="metric-label">India VIX <span id="mc-vix-rt" style="display:none;font-size:0.6rem;background:var(--green-dim);color:var(--green);padding:1px 5px;border-radius:4px;margin-left:4px;">LIVE</span></span>
         <span class="metric-value skeleton" style="height:28px;width:60%;">&nbsp;</span>
         <span class="metric-sub" id="mc-vix-sub">—</span>
       </div>
+      <!-- Card 3: Bias -->
+      <div class="metric-card" id="mc-bias">
+        <span class="metric-label">Market Bias</span>
+        <span class="metric-value neutral skeleton" style="height:28px;width:80%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-score">Score: —</span>
+      </div>
+      <!-- Card 4: FII/DII -->
       <div class="metric-card" id="mc-fii">
         <span class="metric-label">FII Net</span>
         <span class="metric-value skeleton" style="height:28px;width:70%;">&nbsp;</span>
         <span class="metric-sub" id="mc-dii">DII: —</span>
       </div>
-      <div class="metric-card" id="mc-gift">
-        <span class="metric-label">Gift Nifty</span>
-        <span class="metric-value skeleton" style="height:28px;width:65%;">&nbsp;</span>
-        <span class="metric-sub">Overnight signal</span>
-      </div>
+      <!-- Card 5: USD/INR + Crude -->
       <div class="metric-card" id="mc-usdinr">
         <span class="metric-label">USD / INR</span>
         <span class="metric-value skeleton" style="height:28px;width:60%;">&nbsp;</span>
         <span class="metric-sub" id="mc-crude">Crude: —</span>
       </div>
+      <!-- Card 6: US Markets -->
       <div class="metric-card" id="mc-us">
         <span class="metric-label">US Markets</span>
         <span class="metric-value skeleton" style="height:28px;width:75%;">&nbsp;</span>
@@ -904,11 +905,7 @@ function renderMarketContext(ctx) {
   fiiEl.querySelector('.metric-value').className = `metric-value ${fii >= 0 ? 'bullish' : 'bearish'}`;
   document.getElementById('mc-dii').textContent = `DII: ${dii !== undefined ? fmtCrore(dii) : '—'}`;
 
-  // Gift Nifty
-  const gift = ctx.gift_nifty_change_pct;
-  const giftEl = document.getElementById('mc-gift');
-  giftEl.querySelector('.metric-value').textContent = gift !== undefined ? fmtChg(gift) : '—';
-  giftEl.querySelector('.metric-value').className = `metric-value ${gift >= 0 ? 'bullish' : 'bearish'}`;
+  // (Gift Nifty card removed — NIFTY card covers this)
 
   // USD/INR + Crude
   const usdinr = ctx.usdinr;
@@ -1221,29 +1218,48 @@ function startCountdown() {
 }
 
 /* ── Broker status ─────────────────────────────────────────────────── */
+function getCookie(name) {
+  const v = document.cookie.split('; ').find(r => r.startsWith(name + '='));
+  return v ? decodeURIComponent(v.split('=')[1]) : null;
+}
+
+function _applyBrokerUI(connected, userName) {
+  const dot   = document.getElementById('broker-dot');
+  const label = document.getElementById('broker-label');
+  const btn   = document.getElementById('broker-btn');
+  if (connected) {
+    dot.style.background  = 'var(--green)';
+    dot.style.boxShadow   = '0 0 0 3px var(--green-dim)';
+    label.textContent     = userName ? `Kite: ${userName.split(' ')[0]}` : 'Kite Connected';
+    btn.style.color       = 'var(--green)';
+    btn.style.borderColor = 'var(--green-dim)';
+    btn.href              = '/broker/zerodha/logout';
+    btn.target            = '_self';
+    btn.title             = 'Zerodha live — click to disconnect';
+  } else {
+    dot.style.background  = 'var(--red)';
+    dot.style.boxShadow   = 'none';
+    label.textContent     = 'Connect Kite';
+    btn.style.color       = 'var(--text-secondary)';
+    btn.style.borderColor = 'var(--border)';
+    btn.href              = '/broker/zerodha/login';
+    btn.target            = '_blank';
+    btn.title             = 'Connect Zerodha for live data & execution';
+  }
+}
+
 function checkBrokerStatus() {
+  // Instant: read kite_user cookie (set by callback, readable by JS)
+  const cookieUser = getCookie('kite_user');
+  if (cookieUser) {
+    _applyBrokerUI(true, cookieUser);
+    return; // already know we're connected
+  }
+  // No cookie — hit status API to confirm
   fetch('/broker/zerodha/status')
     .then(r => r.json())
-    .then(data => {
-      const dot   = document.getElementById('broker-dot');
-      const label = document.getElementById('broker-label');
-      const btn   = document.getElementById('broker-btn');
-      if (data.connected) {
-        dot.style.background   = 'var(--green)';
-        dot.style.boxShadow    = '0 0 0 2px var(--green-dim)';
-        label.textContent      = data.user_name ? `Kite: ${data.user_name.split(' ')[0]}` : 'Kite Connected';
-        btn.style.color        = 'var(--green)';
-        btn.style.borderColor  = 'var(--green-dim)';
-        btn.title              = 'Zerodha connected — click to re-login';
-      } else {
-        dot.style.background  = 'var(--red)';
-        label.textContent     = 'Connect Kite';
-        btn.style.color       = 'var(--text-secondary)';
-        btn.style.borderColor = 'var(--border)';
-        btn.title             = 'Connect Zerodha for live data & execution';
-      }
-    })
-    .catch(() => {});
+    .then(data => _applyBrokerUI(data.connected, data.user_name || ''))
+    .catch(() => _applyBrokerUI(false, ''));
 }
 
 /* ── Init ──────────────────────────────────────────────────────────── */

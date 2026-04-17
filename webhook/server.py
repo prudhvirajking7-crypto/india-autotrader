@@ -440,9 +440,9 @@ def _build_router():
         })
 
     @router.get("/positions")
-    async def get_positions():
+    async def get_positions(request: Request):
         import httpx as _httpx
-        token = await _kite_access_token()
+        token = _kite_token_from_request(request) or await _redis_get("zerodha:access_token")
 
         # Use live Kite positions if token is available
         if token:
@@ -759,10 +759,9 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
         except Exception:
             return False
 
-    async def _kite_access_token() -> str | None:
-        """Get Zerodha access token from Redis (set after OAuth login)."""
-        tok = await _redis_get("zerodha:access_token")
-        return tok if isinstance(tok, str) else None
+    def _kite_token_from_request(request: Request) -> str | None:
+        """Read Kite access token from secure cookie (primary) or Redis fallback."""
+        return request.cookies.get("kite_token") or None
 
     def _kite_headers(access_token: str) -> dict:
         return {
@@ -785,11 +784,12 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
     @router.get("/broker/zerodha/callback")
     async def zerodha_callback(request_token: str = "", status: str = "", error: str = ""):
         """Kite redirects here after login. Exchange request_token for access_token."""
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import HTMLResponse, Response
         import hashlib, httpx as _httpx
 
         if status != "success" or not request_token:
-            return HTMLResponse(_broker_page("Login Failed", f"Kite returned: status={status} error={error}", ok=False))
+            return HTMLResponse(_broker_page("Login Failed",
+                f"Kite returned: status={status} error={error}", ok=False))
 
         api_key    = settings.zerodha_api_key or ""
         api_secret = settings.zerodha_api_secret or ""
@@ -803,58 +803,89 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                     headers={"X-Kite-Version": "3"},
                 )
             if resp.status_code != 200:
-                return HTMLResponse(_broker_page("Token Error", f"Kite API error {resp.status_code}: {resp.text[:300]}", ok=False))
+                return HTMLResponse(_broker_page(
+                    "Token Error", f"Kite error {resp.status_code}: {resp.text[:300]}", ok=False))
 
-            data = resp.json().get("data", {})
+            data         = resp.json().get("data", {})
             access_token = data.get("access_token", "")
             user_name    = data.get("user_name", "")
             if not access_token:
-                return HTMLResponse(_broker_page("Token Error", "No access_token in response", ok=False))
+                return HTMLResponse(_broker_page("Token Error", "No access_token in Kite response", ok=False))
 
-            # Store in Redis — valid until midnight IST (~midnight UTC+5:30)
+            # Also cache in Redis if available (best-effort)
             await _redis_set("zerodha:access_token", access_token, ttl=86400)
             await _redis_set("zerodha:user_info",
                              {"user_name": user_name, "login_time": int(time.time())}, ttl=86400)
 
             log.info("zerodha.oauth.success", user=user_name)
-            return HTMLResponse(_broker_page("Connected!", f"Welcome, {user_name}! Zerodha is now live.", ok=True))
+
+            # Primary storage: secure HTTP-only cookie valid until tonight midnight
+            html_resp = HTMLResponse(
+                _broker_page("Connected!", f"Welcome {user_name}! Zerodha is now live.", ok=True))
+            html_resp.set_cookie(
+                key="kite_token",   value=access_token,
+                max_age=86400,      httponly=True,
+                secure=True,        samesite="lax",
+                path="/",
+            )
+            html_resp.set_cookie(
+                key="kite_user",    value=user_name,
+                max_age=86400,      httponly=False,   # readable by JS for display
+                secure=True,        samesite="lax",
+                path="/",
+            )
+            return html_resp
 
         except Exception as e:
             log.error("zerodha.callback.error", error=str(e))
             return HTMLResponse(_broker_page("Error", str(e), ok=False))
 
     @router.get("/broker/zerodha/status")
-    async def zerodha_status():
-        """Check whether a valid Kite access token is available."""
+    async def zerodha_status(request: Request):
+        """Check whether a valid Kite access token is in the cookie."""
         import httpx as _httpx
-        token = await _kite_access_token()
-        if not token:
-            return {"connected": False, "message": "Not logged in. Visit /broker/zerodha/login"}
+        token = _kite_token_from_request(request)
 
-        # Verify the token is still valid by hitting Kite profile
+        # Fallback: try Redis
+        if not token:
+            token = await _redis_get("zerodha:access_token")
+            if token and not isinstance(token, str):
+                token = None
+
+        if not token:
+            return {"connected": False, "message": "Not logged in"}
+
+        # Quick verify against Kite profile endpoint
         try:
             async with _httpx.AsyncClient(timeout=8) as client:
                 r = await client.get("https://api.kite.trade/user/profile",
                                      headers=_kite_headers(token))
             if r.status_code == 200:
-                info = await _redis_get("zerodha:user_info") or {}
-                return {"connected": True, "user_name": r.json().get("data", {}).get("user_name", ""),
-                        "login_time": info.get("login_time")}
-            return {"connected": False, "message": f"Token expired (HTTP {r.status_code}). Re-login."}
+                user_name = (r.json().get("data", {}).get("user_name", "")
+                             or request.cookies.get("kite_user", ""))
+                return {"connected": True, "user_name": user_name}
+            # Token invalid — tell JS to clear it
+            return {"connected": False, "expired": True,
+                    "message": f"Token expired (HTTP {r.status_code}). Please re-login."}
         except Exception as e:
             return {"connected": False, "message": str(e)}
 
-    @router.delete("/broker/zerodha/logout")
+    @router.get("/broker/zerodha/logout")
     async def zerodha_logout():
-        """Invalidate the stored Kite access token."""
-        import redis.asyncio as aioredis
+        """Clear the Kite cookie and Redis entry."""
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse({"message": "Logged out"})
+        resp.delete_cookie("kite_token", path="/")
+        resp.delete_cookie("kite_user",  path="/")
+        # Best-effort Redis clear
         try:
+            import redis.asyncio as aioredis
             r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
             await r.delete("zerodha:access_token", "zerodha:user_info")
             await r.aclose()
         except Exception:
             pass
-        return {"message": "Logged out"}
+        return resp
 
     def _broker_page(title: str, msg: str, ok: bool) -> str:
         color = "#3fb950" if ok else "#f85149"
@@ -881,7 +912,7 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
         return {"signals": [], "message": "AI analysis runs every 30 min during market hours. Connect Redis to persist signals."}
 
     @router.get("/api/market-context")
-    async def get_market_context():
+    async def get_market_context(request: Request):
         """Live market context — Kite LTP if connected, else Yahoo Finance v8 API."""
         import asyncio, httpx as _httpx
 
@@ -920,7 +951,7 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
 
         try:
             # Attempt Kite LTP for Indian indices (zero delay, real-time)
-            kite_token = await _kite_access_token()
+            kite_token = _kite_token_from_request(request) or await _redis_get("zerodha:access_token")
             kite_nifty = kite_vix = kite_sensex = None
             if kite_token:
                 try:
