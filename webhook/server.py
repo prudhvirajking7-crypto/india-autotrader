@@ -492,23 +492,30 @@ def _build_router():
             _headers = {"User-Agent": "Mozilla/5.0"}
             _base = "https://query1.finance.yahoo.com/v8/finance/chart"
 
-            async def _closes(sym, rng="5d"):
+            async def _yf_meta(sym):
+                """Fetch (last_price, prev_close) from Yahoo Finance meta — no close lag."""
                 try:
                     async with _httpx.AsyncClient(timeout=10) as c:
-                        r = await c.get(f"{_base}/{sym}", params={"interval": "1d", "range": rng}, headers=_headers)
+                        r = await c.get(f"{_base}/{sym}",
+                                        params={"interval": "1d", "range": "5d"},
+                                        headers=_headers)
                     if r.status_code != 200:
-                        return []
+                        return 0.0, 0.0
                     res = r.json().get("chart", {}).get("result", [])
-                    q = res[0].get("indicators", {}).get("quote", [{}])[0] if res else {}
-                    return [x for x in (q.get("close") or []) if x is not None]
+                    if not res:
+                        return 0.0, 0.0
+                    meta = res[0].get("meta", {})
+                    last = meta.get("regularMarketPrice") or 0.0
+                    prev = meta.get("chartPreviousClose") or meta.get("previousClose") or last
+                    return float(last), float(prev)
                 except Exception:
-                    return []
+                    return 0.0, 0.0
 
-            nifty_c, vix_c = await asyncio.gather(_closes("^NSEI"), _closes("^INDIAVIX", "2d"))
-            n_last = round(nifty_c[-1], 0) if nifty_c else 0
-            n_prev = nifty_c[-2] if len(nifty_c) > 1 else n_last
+            (n_last, n_prev), (v_last, _) = await asyncio.gather(
+                _yf_meta("^NSEI"), _yf_meta("^INDIAVIX"))
             n_chg  = round((n_last - n_prev) / n_prev * 100, 2) if n_prev else 0
-            v_last = round(vix_c[-1], 1) if vix_c else 15.0
+            n_last = round(n_last, 0)
+            v_last = round(v_last, 1) if v_last else 15.0
             return {"nifty_last": n_last, "nifty_chg_pct": n_chg, "india_vix": v_last}
 
         import asyncio
@@ -631,13 +638,15 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                 res = r.json().get("chart", {}).get("result", [])
                 if not res:
                     return None
+                meta = res[0].get("meta", {})
                 q = res[0].get("indicators", {}).get("quote", [{}])[0]
                 closes  = [x for x in (q.get("close")  or []) if x is not None]
                 volumes = [x for x in (q.get("volume") or []) if x is not None]
                 if len(closes) < 20:
                     return None
-                last    = closes[-1]
-                prev    = closes[-2]
+                # Use meta price (no candle lag) for display; historical for RSI/SMA
+                last = meta.get("regularMarketPrice") or closes[-1]
+                prev = meta.get("chartPreviousClose") or closes[-2]
                 sma20   = _sma(closes, 20)
                 sma5    = _sma(closes, 5)
                 rsi     = _rsi14(closes)
@@ -938,13 +947,21 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                 res = r.json().get("chart", {}).get("result", [])
                 if not res:
                     return name, 0.0, 0.0
-                q = res[0].get("indicators", {}).get("quote", [{}])[0]
-                closes = [x for x in (q.get("close") or []) if x is not None]
-                if not closes:
-                    return name, 0.0, 0.0
-                last = closes[-1]
-                prev = closes[-2] if len(closes) > 1 else last
-                pct  = round((last - prev) / prev * 100, 2) if prev else 0.0
+                meta = res[0].get("meta", {})
+                # Use regularMarketPrice from meta — always reflects the latest
+                # trade/close (historical closes[] lag by one candle on Yahoo)
+                last = meta.get("regularMarketPrice") or 0.0
+                prev = (meta.get("chartPreviousClose")
+                        or meta.get("previousClose") or last)
+                if not last:
+                    # Fallback to historical closes if meta is empty
+                    q = res[0].get("indicators", {}).get("quote", [{}])[0]
+                    closes = [x for x in (q.get("close") or []) if x is not None]
+                    if not closes:
+                        return name, 0.0, 0.0
+                    last = closes[-1]
+                    prev = closes[-2] if len(closes) > 1 else last
+                pct = round((last - prev) / prev * 100, 2) if prev else 0.0
                 return name, round(last, 2), pct
             except Exception:
                 return name, 0.0, 0.0
