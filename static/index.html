@@ -542,6 +542,49 @@
     .card-body-scroll::-webkit-scrollbar { width: 4px; }
     .card-body-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+    /* ── Index ticker strip ─────────────────────────────────────────── */
+    .idx-item { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+    .idx-val  { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+    .idx-val.up   { color: var(--green); }
+    .idx-val.down { color: var(--red); }
+
+    /* ── Scanner rich rows ──────────────────────────────────────────── */
+    .scan-row {
+      display: flex; flex-direction: column; gap: 5px;
+      padding: 10px 12px; border-radius: var(--radius-sm);
+      border-left: 3px solid var(--border);
+      background: var(--bg-card-alt); margin-bottom: 8px;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .scan-row:hover { background: var(--bg-input); }
+    .scan-row.ce { border-left-color: var(--green); }
+    .scan-row.pe { border-left-color: var(--red); }
+    .scan-top  { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .scan-sym  { font-weight: 700; font-size: 0.95rem; color: var(--text-primary); }
+    .scan-price { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .scan-indicators {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      font-size: 0.72rem; color: var(--text-secondary);
+    }
+    .scan-ind { background: var(--bg-input); padding: 2px 7px; border-radius: 4px; }
+    .scan-signals {
+      font-size: 0.71rem; color: var(--text-muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .scan-footer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+    .strike-tag {
+      font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+      background: var(--accent-dim); color: var(--accent);
+    }
+    .scan-row.ce .strike-tag { background: var(--green-dim); color: var(--green); }
+    .scan-row.pe .strike-tag { background: var(--red-dim); color: var(--red); }
+    .chart-link-btn {
+      margin-left: auto; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px;
+      background: transparent; border: 1px solid var(--border); color: var(--text-secondary);
+      cursor: pointer; transition: all 0.15s;
+    }
+    .chart-link-btn:hover { border-color: var(--accent); color: var(--accent); }
+
     /* ── Reduced motion support ──────────────────────────────────────── */
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -584,6 +627,17 @@
   <span id="refresh-countdown">Next refresh in <strong id="refresh-secs">30</strong>s</span>
 </div>
 
+<!-- ── Index ticker strip ─────────────────────────────────────────────── -->
+<div id="index-strip" style="background:var(--bg-card-alt);border-bottom:1px solid var(--border-muted);
+     padding:8px 24px;display:flex;gap:28px;overflow-x:auto;font-size:0.8rem;white-space:nowrap;">
+  <span class="idx-item" id="ix-nifty">NIFTY 50 <span class="idx-val">—</span></span>
+  <span class="idx-item" id="ix-bank">BANKNIFTY <span class="idx-val">—</span></span>
+  <span class="idx-item" id="ix-it">NIFTY IT <span class="idx-val">—</span></span>
+  <span class="idx-item" id="ix-sensex">SENSEX <span class="idx-val">—</span></span>
+  <span class="idx-item" id="ix-vix">VIX <span class="idx-val">—</span></span>
+  <span style="margin-left:auto;color:var(--text-muted);font-size:0.72rem;" id="ix-ts">—</span>
+</div>
+
 <!-- ── Main ──────────────────────────────────────────────────────────── -->
 <main class="main" id="main-content">
 
@@ -591,37 +645,31 @@
   <section aria-labelledby="market-context-heading">
     <h1 id="market-context-heading" class="section-label">Market Context</h1>
     <div class="grid-6" id="market-metrics">
-      <!-- Card 1: NIFTY 50 -->
       <div class="metric-card" id="mc-nifty">
         <span class="metric-label">NIFTY 50 <span id="mc-nifty-rt" style="display:none;font-size:0.6rem;background:var(--green-dim);color:var(--green);padding:1px 5px;border-radius:4px;margin-left:4px;">LIVE</span></span>
         <span class="metric-value skeleton" style="height:28px;width:75%;">&nbsp;</span>
         <span class="metric-sub" id="mc-nifty-chg">—</span>
       </div>
-      <!-- Card 2: VIX -->
+      <div class="metric-card" id="mc-bank">
+        <span class="metric-label">BANKNIFTY</span>
+        <span class="metric-value skeleton" style="height:28px;width:75%;">&nbsp;</span>
+        <span class="metric-sub" id="mc-bank-chg">—</span>
+      </div>
       <div class="metric-card" id="mc-vix">
         <span class="metric-label">India VIX <span id="mc-vix-rt" style="display:none;font-size:0.6rem;background:var(--green-dim);color:var(--green);padding:1px 5px;border-radius:4px;margin-left:4px;">LIVE</span></span>
         <span class="metric-value skeleton" style="height:28px;width:60%;">&nbsp;</span>
         <span class="metric-sub" id="mc-vix-sub">—</span>
       </div>
-      <!-- Card 3: Bias -->
       <div class="metric-card" id="mc-bias">
         <span class="metric-label">Market Bias</span>
         <span class="metric-value neutral skeleton" style="height:28px;width:80%;">&nbsp;</span>
         <span class="metric-sub" id="mc-score">Score: —</span>
       </div>
-      <!-- Card 4: FII/DII -->
-      <div class="metric-card" id="mc-fii">
-        <span class="metric-label">FII Net</span>
-        <span class="metric-value skeleton" style="height:28px;width:70%;">&nbsp;</span>
-        <span class="metric-sub" id="mc-dii">DII: —</span>
-      </div>
-      <!-- Card 5: USD/INR + Crude -->
       <div class="metric-card" id="mc-usdinr">
         <span class="metric-label">USD / INR</span>
         <span class="metric-value skeleton" style="height:28px;width:60%;">&nbsp;</span>
         <span class="metric-sub" id="mc-crude">Crude: —</span>
       </div>
-      <!-- Card 6: US Markets -->
       <div class="metric-card" id="mc-us">
         <span class="metric-label">US Markets</span>
         <span class="metric-value skeleton" style="height:28px;width:75%;">&nbsp;</span>
@@ -630,31 +678,29 @@
     </div>
   </section>
 
-  <!-- Row 2: TradingView chart -->
+  <!-- Row 2: Chart — symbol buttons updated dynamically from scanner -->
   <section class="chart-section card" aria-labelledby="chart-heading">
     <div class="card-header">
       <h2 class="card-title" id="chart-heading">Live Chart</h2>
-      <nav class="symbol-switcher" aria-label="Chart symbol selector">
-        <button class="sym-btn active" onclick="switchSymbol('NSE:RELIANCE', this)" aria-pressed="true">RELIANCE</button>
-        <button class="sym-btn" onclick="switchSymbol('NSE:HDFCBANK', this)" aria-pressed="false">HDFCBANK</button>
-        <button class="sym-btn" onclick="switchSymbol('NSE:INFY', this)" aria-pressed="false">INFY</button>
-        <button class="sym-btn" onclick="switchSymbol('NSE:TCS', this)" aria-pressed="false">TCS</button>
-        <button class="sym-btn" onclick="switchSymbol('NSE:ICICIBANK', this)" aria-pressed="false">ICICIBANK</button>
-        <button class="sym-btn" onclick="switchSymbol('NSE:INFY', this)" aria-pressed="false">INFY</button>
+      <nav class="symbol-switcher" id="sym-switcher" aria-label="Chart symbol selector">
+        <button class="sym-btn active" onclick="switchSymbol('NSE:RELIANCE',this)" aria-pressed="true">RELIANCE</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:HDFCBANK',this)">HDFCBANK</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:TCS',this)">TCS</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:ICICIBANK',this)">ICICIBANK</button>
+        <button class="sym-btn" onclick="switchSymbol('NSE:INFY',this)">INFY</button>
       </nav>
     </div>
-    <div class="chart-container" id="tv_chart" aria-label="TradingView price chart"></div>
+    <div class="chart-container" id="tv_chart" aria-label="Price chart"></div>
   </section>
 
   <!-- Row 3: AI signals + Scanner picks -->
   <div class="grid-2">
-
     <!-- AI Options Signals -->
     <section class="card" aria-labelledby="ai-signals-heading">
       <div class="card-header">
         <h2 class="card-title" id="ai-signals-heading">AI Options Signals</h2>
         <div class="ai-meta">
-          <span class="model-tag" id="ai-model-tag">Gemma 4</span>
+          <span class="model-tag" id="ai-model-tag">—</span>
           <span class="timestamp-tag" id="ai-timestamp">—</span>
         </div>
       </div>
@@ -664,19 +710,18 @@
       </div>
     </section>
 
-    <!-- Scanner Picks -->
+    <!-- Scanner Picks — full technicals, click to chart -->
     <section class="card" aria-labelledby="scanner-heading">
       <div class="card-header">
-        <h2 class="card-title" id="scanner-heading">Top Scanner Picks</h2>
+        <h2 class="card-title" id="scanner-heading">🔍 Trending Picks <small style="font-weight:400;font-size:0.7rem;color:var(--text-muted);" id="scanner-count"></small></h2>
         <span id="scanner-ts" style="font-size:0.7rem;color:var(--text-muted);">—</span>
       </div>
       <div class="card-body-scroll" id="scanner-body">
-        <div class="skeleton" style="height:44px;margin-bottom:8px;border-radius:5px;"></div>
-        <div class="skeleton" style="height:44px;margin-bottom:8px;border-radius:5px;"></div>
-        <div class="skeleton" style="height:44px;border-radius:5px;"></div>
+        <div class="skeleton" style="height:70px;margin-bottom:8px;border-radius:5px;"></div>
+        <div class="skeleton" style="height:70px;margin-bottom:8px;border-radius:5px;"></div>
+        <div class="skeleton" style="height:70px;border-radius:5px;"></div>
       </div>
     </section>
-
   </div>
 
   <!-- Row 4: Positions -->
@@ -807,6 +852,20 @@ function switchSymbol(symbol, btn) {
   initChart(symbol);
 }
 
+/* Called from scanner pick cards — loads that stock's chart and scrolls to it */
+function viewChart(sym) {
+  const nseSym = sym.includes(':') ? sym : 'NSE:' + sym;
+  // Highlight matching button in sym-switcher if present
+  document.querySelectorAll('.sym-btn').forEach(b => {
+    const matches = b.textContent.trim() === sym.replace('NSE:','');
+    b.classList.toggle('active', matches);
+    b.setAttribute('aria-pressed', String(matches));
+  });
+  initChart(nseSym);
+  const chartEl = document.getElementById('tv_chart');
+  if (chartEl) chartEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 /* ── Format helpers ────────────────────────────────────────────────── */
 function fmtChg(val) {
   if (val === null || val === undefined) return '—';
@@ -866,7 +925,31 @@ function renderMarketContext(ctx) {
     return;
   }
 
-  // NIFTY card
+  // ── Index ticker strip ───────────────────────────────────────────────
+  function _setIdx(id, last, chg, decimals) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const v = el.querySelector('.idx-val');
+    if (!v) return;
+    const num = Number(last).toLocaleString('en-IN', {maximumFractionDigits: decimals || 0});
+    const sign = chg >= 0 ? '+' : '';
+    v.textContent = `${num} (${sign}${Number(chg).toFixed(2)}%)`;
+    v.className   = `idx-val ${chg >= 0 ? 'up' : 'down'}`;
+  }
+  if (ctx.nifty_last) _setIdx('ix-nifty', ctx.nifty_last, ctx.nifty_chg_pct);
+  if (ctx.banknifty_last) _setIdx('ix-bank', ctx.banknifty_last, ctx.banknifty_chg_pct);
+  if (ctx.niftyit_last) _setIdx('ix-it', ctx.niftyit_last, ctx.niftyit_chg_pct);
+  if (ctx.sensex_last) _setIdx('ix-sensex', ctx.sensex_last, ctx.sensex_chg_pct);
+  if (ctx.india_vix) {
+    const vEl = document.getElementById('ix-vix');
+    if (vEl) { const v = vEl.querySelector('.idx-val');
+      if (v) { v.textContent = Number(ctx.india_vix).toFixed(1);
+               v.className = `idx-val ${ctx.india_vix > 20 ? 'down' : 'up'}`; } }
+  }
+  const ixTs = document.getElementById('ix-ts');
+  if (ixTs) ixTs.textContent = new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit'}) + ' IST';
+
+  // ── NIFTY card ───────────────────────────────────────────────────────
   const niftyEl = document.getElementById('mc-nifty');
   if (niftyEl && ctx.nifty_last) {
     niftyEl.querySelector('.metric-value').textContent = Number(ctx.nifty_last).toLocaleString('en-IN', {maximumFractionDigits:0});
@@ -875,6 +958,15 @@ function renderMarketContext(ctx) {
     if (chgEl) chgEl.textContent = fmtChg(ctx.nifty_chg_pct);
     const rtBadge = document.getElementById('mc-nifty-rt');
     if (rtBadge && ctx.nifty_realtime) rtBadge.style.display = 'inline';
+  }
+
+  // ── BANKNIFTY card ───────────────────────────────────────────────────
+  const bankEl = document.getElementById('mc-bank');
+  if (bankEl && ctx.banknifty_last) {
+    bankEl.querySelector('.metric-value').textContent = Number(ctx.banknifty_last).toLocaleString('en-IN', {maximumFractionDigits:0});
+    bankEl.querySelector('.metric-value').className = `metric-value ${ctx.banknifty_chg_pct >= 0 ? 'bullish' : 'bearish'}`;
+    const bchg = document.getElementById('mc-bank-chg');
+    if (bchg) bchg.textContent = fmtChg(ctx.banknifty_chg_pct);
   }
 
   const bc = biasClass(ctx.bias || ctx.market_bias || '');
@@ -984,43 +1076,84 @@ function renderAISignals(data) {
   }).join('');
 }
 
-/* ── Render: Scanner picks ─────────────────────────────────────────── */
-function renderScanner(data) {
-  const body = document.getElementById('scanner-body');
-  const picks = data.top_picks || data.picks || [];
-  const ts = data.scanned_at || data.generated_at;
+/* ── Dynamic chart switcher from scanner ───────────────────────────── */
+function _updateSymSwitcher(picks) {
+  const nav = document.getElementById('sym-switcher');
+  if (!nav || picks.length === 0) return;
+  const top5 = picks.slice(0, 5).map(p => p.symbol);
+  nav.innerHTML = top5.map((sym, i) => `
+    <button class="sym-btn${i === 0 ? ' active' : ''}"
+            onclick="switchSymbol('NSE:${esc(sym)}',this)"
+            aria-pressed="${i === 0}">
+      ${esc(sym)}
+    </button>`).join('');
+  if (top5.length > 0) initChart('NSE:' + top5[0]);
+}
 
-  if (ts) {
-    document.getElementById('scanner-ts').textContent = `${fmtTs(ts)}`;
-  }
+/* ── Render: Scanner picks (rich technical cards) ─────────────────── */
+function renderScanner(data) {
+  const body   = document.getElementById('scanner-body');
+  const picks  = data.top_picks || data.picks || [];
+  const ts     = data.scanned_at || data.generated_at;
+  const total  = data.symbols_scanned || 0;
+  const trend  = data.trending_count  || picks.length;
+
+  if (ts) document.getElementById('scanner-ts').textContent = fmtTs(ts);
+  const countEl = document.getElementById('scanner-count');
+  if (countEl && total) countEl.textContent = `${trend} trending / ${total} scanned`;
 
   if (picks.length === 0) {
     body.innerHTML = `
       <div class="empty-state" role="status">
         <div class="empty-icon" aria-hidden="true">📡</div>
-        <div class="empty-msg">No scanner picks. Scan runs every 15 min from 09:30 IST.</div>
-        <button onclick="triggerScanner()" style="margin-top:12px;padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">
-          🔍 Scan Now
-        </button>
+        <div class="empty-msg">Scanning NIFTY 50 universe for trending stocks…</div>
+        <button onclick="triggerScanner()" style="margin-top:12px;padding:8px 20px;
+          background:var(--accent);border:none;border-radius:6px;color:#fff;
+          font-size:0.85rem;cursor:pointer;font-weight:600;">🔍 Scan Now (NIFTY 50)</button>
       </div>`;
     return;
   }
 
-  body.innerHTML = picks.slice(0, 10).map(p => {
-    const score = p.score !== undefined ? Number(p.score) : null;
-    const scoreClass = score === null ? 'neutral' : score > 0 ? 'positive' : 'negative';
-    const scoreText = score !== null ? (score > 0 ? `+${score.toFixed(1)}` : score.toFixed(1)) : '—';
+  // Update chart symbol buttons with top picks
+  _updateSymSwitcher(picks);
+
+  const actionLabel = { BUY_CE: '▲ BUY CE', BUY_PE: '▼ BUY PE', SELL_CE: '↓ SELL CE', SELL_PE: '↑ SELL PE' };
+
+  body.innerHTML = picks.map(p => {
+    const isCE   = (p.action || '').includes('CE');
+    const cls    = isCE ? 'ce' : 'pe';
+    const chgCls = p.change_pct >= 0 ? 'bullish' : 'bearish';
+    const conf   = Math.round((p.confidence || p.score || 0) * 100);
+    const sigs   = (p.signals || []).join(' · ') || '—';
+    const rsiCl  = p.rsi > 70 ? 'var(--orange)' : p.rsi < 30 ? 'var(--red)' : 'var(--text-secondary)';
+    const macdArrow = p.macd_hist > 0 ? '▲' : p.macd_hist < 0 ? '▼' : '–';
+    const macdCl = p.macd_hist > 0 ? 'var(--green)' : p.macd_hist < 0 ? 'var(--red)' : 'var(--text-muted)';
 
     return `
-    <div class="pick-item" role="listitem">
-      <div class="pick-left">
-        <div class="pick-symbol">${esc(p.symbol || '?')}</div>
-        <div class="pick-meta">${esc(p.wyckoff_phase || '')} ${p.breakout_type ? '· ' + esc(p.breakout_type) : ''}</div>
+    <div class="scan-row ${cls}" onclick="viewChart('${esc(p.symbol)}')" role="button"
+         aria-label="${esc(p.symbol)} ${esc(p.action)} signal">
+      <div class="scan-top">
+        <span class="scan-sym">${esc(p.symbol)}</span>
+        <span class="${isCE ? 'badge-buy-ce' : 'badge-buy-pe'}" style="font-size:0.72rem;padding:2px 8px;border-radius:4px;">
+          ${actionLabel[p.action] || esc(p.action)}
+        </span>
+        <span class="scan-price ${chgCls}">
+          ₹${Number(p.ltp).toLocaleString('en-IN')}
+          <span style="font-size:0.75rem;opacity:0.8;">(${p.change_pct >= 0 ? '+' : ''}${p.change_pct}%)</span>
+        </span>
       </div>
-      <span class="pick-action" style="color:${(p.action || '').includes('BUY') ? 'var(--green)' : 'var(--red)'}">
-        ${esc(p.action || '—')}
-      </span>
-      <span class="pick-score ${scoreClass}" aria-label="Score ${scoreText}">${scoreText}</span>
+      <div class="scan-indicators">
+        <span class="scan-ind">RSI <strong style="color:${rsiCl}">${p.rsi}</strong></span>
+        <span class="scan-ind">MACD <strong style="color:${macdCl}">${macdArrow}</strong></span>
+        <span class="scan-ind">Vol <strong>${p.vol_surge}x</strong></span>
+        <span class="scan-ind">ATR ₹${p.atr || '—'}</span>
+        <span class="scan-ind">Conf <strong>${conf}%</strong></span>
+      </div>
+      <div class="scan-signals" title="${esc(sigs)}">${esc(sigs)}</div>
+      <div class="scan-footer">
+        <span class="strike-tag">Strike ₹${p.strike} | Est ₹${p.premium_est} prem | T:+${p.target_pct}% SL:-${p.sl_pct}%</span>
+        <button class="chart-link-btn" onclick="event.stopPropagation();viewChart('${esc(p.symbol)}')">📊 Chart</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -1115,7 +1248,7 @@ async function triggerAI() {
 
 async function triggerScanner() {
   const body = document.getElementById('scanner-body');
-  if (body) body.innerHTML = '<div class="empty-state"><div class="empty-msg">🔍 Scanning 10 NSE symbols…</div></div>';
+  if (body) body.innerHTML = '<div class="empty-state"><div class="empty-msg">🔍 Scanning NIFTY 50 universe (46 stocks)… this takes ~15s</div></div>';
   try {
     const res = await fetch('/api/scanner/run', { method: 'POST' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

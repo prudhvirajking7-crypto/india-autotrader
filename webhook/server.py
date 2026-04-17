@@ -603,95 +603,207 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
 
     @router.post("/api/scanner/run")
     async def run_scanner_now():
-        """Synchronous on-demand scanner — returns picks directly using yfinance."""
-        import time
-        import asyncio
+        """Full-universe scanner: NIFTY 50 stocks, RSI+MACD+BB+EMA+ATR+Volume."""
+        import time, asyncio, httpx as _httpx
 
-        WATCHLIST = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
-                     "SBIN", "BHARTIARTL", "KOTAKBANK", "WIPRO", "AXISBANK"]
+        # ── NIFTY 50 universe — all have F&O, high liquidity ─────────────
+        UNIVERSE = [
+            "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK",
+            "BAJAJ-AUTO","BAJAJFINSV","BAJFINANCE","BHARTIARTL","BPCL",
+            "BRITANNIA","CIPLA","COALINDIA","DIVISLAB","DRREDDY",
+            "EICHERMOT","GRASIM","HCLTECH","HDFCBANK","HDFCLIFE",
+            "HEROMOTOCO","HINDALCO","HINDUNILVR","ICICIBANK","INDUSINDBK",
+            "INFY","ITC","JSWSTEEL","KOTAKBANK","LT",
+            "M&M","MARUTI","NTPC","ONGC","POWERGRID",
+            "RELIANCE","SBIN","SUNPHARMA","TATACONSUM","TATAMOTORS",
+            "TATASTEEL","TCS","TECHM","TITAN","ULTRACEMCO","WIPRO",
+        ]
 
-        # Pure-Python RSI/SMA helpers — no pandas/numpy needed
-        def _sma(prices, n):
-            return sum(prices[-n:]) / n if len(prices) >= n else (sum(prices) / len(prices) if prices else 0.0)
+        # ── Pure-Python technical indicators ─────────────────────────────
+        def _ema(xs, p):
+            if not xs or len(xs) < p:
+                return xs[-1] if xs else 0.0
+            k = 2 / (p + 1)
+            e = sum(xs[:p]) / p
+            for x in xs[p:]:
+                e = x * k + e * (1 - k)
+            return e
 
-        def _rsi14(closes):
-            if len(closes) < 15:
+        def _ema_full(xs, p):
+            """EMA series same length as input, None-padded at start."""
+            if len(xs) < p:
+                return xs[:]
+            k = 2 / (p + 1)
+            out = [None] * (p - 1)
+            e = sum(xs[:p]) / p
+            out.append(e)
+            for x in xs[p:]:
+                e = x * k + e * (1 - k)
+                out.append(e)
+            return out
+
+        def _rsi(xs, p=14):
+            if len(xs) < p + 1:
                 return 50.0
-            gains, losses = [], []
-            for i in range(1, len(closes)):
-                d = closes[i] - closes[i - 1]
-                gains.append(max(d, 0.0))
-                losses.append(max(-d, 0.0))
-            ag = sum(gains[-14:]) / 14
-            al = sum(losses[-14:]) / 14
-            return 100.0 if al == 0 else round(100 - 100 / (1 + ag / al), 1)
+            g = [max(xs[i]-xs[i-1], 0) for i in range(1, len(xs))]
+            l = [max(xs[i-1]-xs[i], 0) for i in range(1, len(xs))]
+            ag = sum(g[-p:]) / p; al = sum(l[-p:]) / p
+            return round(100 - 100 / (1 + ag / al), 1) if al else 100.0
 
-        async def _fetch_sym(sym):
-            import httpx as _httpx
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS"
-            try:
-                async with _httpx.AsyncClient(timeout=12) as c:
-                    r = await c.get(url, params={"interval": "1d", "range": "3mo"},
-                                    headers={"User-Agent": "Mozilla/5.0"})
-                if r.status_code != 200:
-                    return None
-                res = r.json().get("chart", {}).get("result", [])
-                if not res:
-                    return None
-                meta = res[0].get("meta", {})
-                q = res[0].get("indicators", {}).get("quote", [{}])[0]
-                closes  = [x for x in (q.get("close")  or []) if x is not None]
-                volumes = [x for x in (q.get("volume") or []) if x is not None]
-                if len(closes) < 20:
-                    return None
-                # Use meta price (no candle lag) for display; historical for RSI/SMA
-                last = meta.get("regularMarketPrice") or closes[-1]
-                prev = meta.get("chartPreviousClose") or closes[-2]
-                sma20   = _sma(closes, 20)
-                sma5    = _sma(closes, 5)
-                rsi     = _rsi14(closes)
-                avg_vol = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else 1.0
-                vol_now = volumes[-1] if volumes else avg_vol
-                vol_surge = round(vol_now / avg_vol, 1) if avg_vol > 0 else 1.0
-                chg_pct   = round((last - prev) / prev * 100, 2) if prev else 0.0
+        def _macd(xs):
+            if len(xs) < 35:
+                return 0.0, 0.0, 0.0
+            e12 = _ema_full(xs, 12); e26 = _ema_full(xs, 26)
+            ml  = [e12[i] - e26[i] for i in range(len(xs))
+                   if e12[i] is not None and e26[i] is not None]
+            if not ml:
+                return 0.0, 0.0, 0.0
+            sig = _ema(ml, 9)
+            return round(ml[-1], 4), round(sig, 4), round(ml[-1] - sig, 4)
 
-                action = "NEUTRAL"; score = 0.0
-                if last > sma20 and sma5 > sma20 and rsi < 70:
-                    action = "BUY";  score = round(min(rsi / 100 + vol_surge * 0.1, 1.0), 2)
-                elif last < sma20 and sma5 < sma20 and rsi > 30:
-                    action = "SELL"; score = round(-min((100 - rsi) / 100 + vol_surge * 0.1, 1.0), 2)
+        def _bb(xs, p=20, m=2.0):
+            w = xs[-p:] if len(xs) >= p else xs
+            n = len(w); mu = sum(w) / n
+            std = (sum((c - mu)**2 for c in w) / n) ** 0.5
+            return round(mu + m*std, 2), round(mu, 2), round(mu - m*std, 2)
 
-                return {
-                    "symbol": sym, "action": action, "score": score,
-                    "ltp": round(last, 2), "change_pct": chg_pct,
-                    "rsi": rsi, "vol_surge": vol_surge,
-                    "above_sma20": last > sma20,
-                    "wyckoff_phase": "Markup" if action == "BUY" else "Markdown" if action == "SELL" else "Distribution",
-                    "breakout_type": "Volume Surge" if vol_surge > 1.5 else "",
-                }
-            except Exception:
+        def _atr(hs, ls, cs, p=14):
+            if len(cs) < 2:
+                return 0.0
+            trs = [max(hs[i]-ls[i], abs(hs[i]-cs[i-1]), abs(ls[i]-cs[i-1]))
+                   for i in range(1, len(cs))]
+            n = min(p, len(trs))
+            return round(sum(trs[-n:]) / n, 2) if n else 0.0
+
+        # ── Scoring + options recommendation ─────────────────────────────
+        def _analyze(sym, last, prev, closes, highs, lows, volumes):
+            if len(closes) < 50:
                 return None
+            ema9  = _ema(closes, 9);  ema20 = _ema(closes, 20); ema50 = _ema(closes, 50)
+            rsi   = _rsi(closes)
+            m_val, sig_val, hist = _macd(closes)
+            bb_up, bb_mid, bb_lo = _bb(closes)
+            atr   = _atr(highs, lows, closes)
+            n     = len(volumes)
+            avg_v = sum(volumes[max(0,n-20):n]) / min(20,n) if volumes else 1.0
+            vol_s = round((volumes[-1] if volumes else avg_v) / avg_v, 2) if avg_v else 1.0
+            chg   = round((last - prev) / prev * 100, 2) if prev else 0.0
 
+            bull = 0; bear = 0; sigs = []
+            # EMA stack
+            if last > ema9 > ema20: bull += 20; sigs.append("EMA bullish stack")
+            elif last < ema9 < ema20: bear += 20; sigs.append("EMA bearish stack")
+            if ema20 > ema50: bull += 15; sigs.append("Uptrend EMA20>50")
+            elif ema20 < ema50: bear += 15; sigs.append("Downtrend EMA20<50")
+            # RSI
+            if 55 <= rsi <= 78: bull += 15; sigs.append(f"RSI {rsi:.0f} bullish")
+            elif 22 <= rsi <= 45: bear += 15; sigs.append(f"RSI {rsi:.0f} bearish")
+            elif rsi > 78: bull += 5
+            elif rsi < 22: bear += 5
+            # MACD
+            if hist > 0 and m_val > 0: bull += 20; sigs.append("MACD above zero+signal")
+            elif hist < 0 and m_val < 0: bear += 20; sigs.append("MACD below zero+signal")
+            elif hist > 0: bull += 10; sigs.append("MACD bullish cross")
+            elif hist < 0: bear += 10; sigs.append("MACD bearish cross")
+            # Bollinger Bands
+            bb_rng = bb_up - bb_lo
+            if bb_rng > 0:
+                bb_pos = (last - bb_lo) / bb_rng
+                if bb_pos > 0.85: bull += 15; sigs.append("Near upper BB breakout")
+                elif bb_pos < 0.15: bear += 15; sigs.append("Near lower BB breakdown")
+                elif bb_pos > 0.6: bull += 5
+                elif bb_pos < 0.4: bear += 5
+            # Volume surge
+            if vol_s >= 1.5:
+                if chg > 0: bull += 15; sigs.append(f"Volume surge {vol_s:.1f}x ↑")
+                else: bear += 15; sigs.append(f"Volume surge {vol_s:.1f}x ↓")
+            elif vol_s >= 1.2:
+                if chg > 0: bull += 7
+                else: bear += 7
+            # Price momentum
+            if chg >= 1.5: bull += 10; sigs.append(f"Strong day +{chg:.1f}%")
+            elif chg <= -1.5: bear += 10; sigs.append(f"Sell-off {chg:.1f}%")
+            elif chg > 0.3: bull += 4
+            elif chg < -0.3: bear += 4
+
+            net = bull - bear
+            if net >= 35:
+                action = "BUY_CE"; conf = round(min(net / 90, 0.95), 2)
+                key = [s for s in sigs if any(w in s.lower() for w in ("bull","upper","above","strong","uptrend"))]
+            elif net <= -35:
+                action = "BUY_PE"; conf = round(min(-net / 90, 0.95), 2)
+                key = [s for s in sigs if any(w in s.lower() for w in ("bear","lower","below","sell","downtrend","surge"))]
+            else:
+                return None  # not trending strongly enough
+
+            step  = (100 if last > 10000 else 50 if last > 3000 else
+                     20  if last > 800  else 10  if last > 200  else 5)
+            atm   = round(last / step) * step
+            strike = atm + step if action == "BUY_CE" else atm - step
+
+            return {
+                "symbol": sym, "action": action, "direction": "BULLISH" if action == "BUY_CE" else "BEARISH",
+                "confidence": conf, "score": conf,
+                "ltp": round(last, 2), "change_pct": chg,
+                "rsi": rsi, "macd_hist": round(hist, 3), "vol_surge": vol_s,
+                "ema9": round(ema9,2), "ema20": round(ema20,2), "ema50": round(ema50,2),
+                "bb_upper": bb_up, "bb_lower": bb_lo, "atr": atr,
+                "bull_score": bull, "bear_score": bear,
+                "strike": strike, "premium_est": round(atr * 0.35, 0),
+                "target_pct": 50, "sl_pct": 25, "expiry": "weekly",
+                "signals": (key or sigs)[:3],
+            }
+
+        # ── Fetch all NIFTY 50 stocks concurrently ───────────────────────
+        sem = asyncio.Semaphore(12)
+
+        async def _fetch(client, sym):
+            async with sem:
+                try:
+                    r = await client.get(
+                        f"https://query2.finance.yahoo.com/v8/finance/chart/{sym}.NS",
+                        params={"interval": "1d", "range": "4mo"},
+                        headers={"User-Agent": "Mozilla/5.0"}, timeout=9,
+                    )
+                    if r.status_code != 200:
+                        return None
+                    res = r.json().get("chart", {}).get("result", [])
+                    if not res:
+                        return None
+                    meta = res[0].get("meta", {})
+                    q    = res[0].get("indicators", {}).get("quote", [{}])[0]
+                    def _clean(arr): return [x for x in (arr or []) if x is not None]
+                    closes  = _clean(q.get("close"))
+                    highs   = _clean(q.get("high"))
+                    lows    = _clean(q.get("low"))
+                    volumes = _clean(q.get("volume"))
+                    if len(closes) < 50:
+                        return None
+                    last = meta.get("regularMarketPrice") or closes[-1]
+                    prev = meta.get("chartPreviousClose") or closes[-2]
+                    return _analyze(sym, last, prev, closes, highs, lows, volumes)
+                except Exception:
+                    return None
+
+        async with _httpx.AsyncClient() as client:
+            raw = await asyncio.gather(*[_fetch(client, s) for s in UNIVERSE])
+
+        picks = sorted([p for p in raw if p], key=lambda p: p["score"], reverse=True)
+        result = {
+            "top_picks": picks[:12], "picks": picks[:12],
+            "scanned_at": int(time.time()),
+            "symbols_scanned": len(UNIVERSE),
+            "trending_count": len(picks),
+        }
         try:
-            raw = await asyncio.gather(*[_fetch_sym(s) for s in WATCHLIST])
-            picks = sorted([p for p in raw if p], key=lambda p: abs(p["score"]), reverse=True)
-            result = {"top_picks": picks, "picks": picks,
-                      "scanned_at": int(time.time()), "symbols_scanned": len(WATCHLIST)}
-
-            # Cache to Redis if available
-            try:
-                import redis.asyncio as aioredis, json as _j
-                r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
-                await r.setex("scanner:latest", 900, _j.dumps(result))
-                await r.aclose()
-            except Exception:
-                pass
-
-            log.info("scanner.on_demand.complete", picks=len(picks))
-            return result
-        except Exception as e:
-            log.error("scanner.on_demand.error", error=str(e))
-            return {"top_picks": [], "picks": [], "error": str(e), "scanned_at": int(time.time())}
+            import redis.asyncio as aioredis, json as _j
+            r = await aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2)
+            await r.setex("scanner:latest", 900, _j.dumps(result))
+            await r.aclose()
+        except Exception:
+            pass
+        log.info("scanner.full.complete", total=len(UNIVERSE), picks=len(picks))
+        return result
 
     @router.get("/api/ohlcv/{symbol}")
     async def get_ohlcv(symbol: str, days: int = 90):
@@ -926,15 +1038,17 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
         import asyncio, httpx as _httpx
 
         _hdrs  = {"User-Agent": "Mozilla/5.0"}
-        _base  = "https://query1.finance.yahoo.com/v8/finance/chart"
+        _base  = "https://query2.finance.yahoo.com/v8/finance/chart"
         _ticks = {
-            "nifty":   "^NSEI",
-            "vix":     "^INDIAVIX",
-            "sensex":  "^BSESN",
-            "sp500":   "^GSPC",
-            "nasdaq":  "^IXIC",
-            "usdinr":  "INR=X",
-            "crude":   "CL=F",
+            "nifty":     "^NSEI",
+            "banknifty": "^NSEBANK",
+            "niftyit":   "^CNXIT",
+            "vix":       "^INDIAVIX",
+            "sensex":    "^BSESN",
+            "sp500":     "^GSPC",
+            "nasdaq":    "^IXIC",
+            "usdinr":    "INR=X",
+            "crude":     "CL=F",
         }
 
         async def _fetch_one(client, name, sym):
@@ -1005,12 +1119,14 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                 results["sensex"]["last"] = kite_sensex
                 results["sensex"]["realtime"] = True
 
-            n   = results.get("nifty",  {})
-            v   = results.get("vix",    {})
-            sp  = results.get("sp500",  {})
-            nq  = results.get("nasdaq", {})
-            fx  = results.get("usdinr", {})
-            cl  = results.get("crude",  {})
+            n   = results.get("nifty",     {})
+            bn  = results.get("banknifty", {})
+            ni  = results.get("niftyit",   {})
+            v   = results.get("vix",       {})
+            sp  = results.get("sp500",     {})
+            nq  = results.get("nasdaq",    {})
+            fx  = results.get("usdinr",    {})
+            cl  = results.get("crude",     {})
 
             vix_val = v.get("last", 15.0)
             n_chg   = n.get("chg_pct", 0.0)
@@ -1031,6 +1147,11 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                 "usdinr": fx.get("last", 0),
                 "crude_oil_usd": cl.get("last", 0),
                 "gift_nifty_change_pct": n_chg,
+                "banknifty_last":     bn.get("last", 0),
+                "banknifty_chg_pct":  bn.get("chg_pct", 0),
+                "niftyit_last":       ni.get("last", 0),
+                "niftyit_chg_pct":    ni.get("chg_pct", 0),
+                "sensex_last":        results.get("sensex", {}).get("last", 0),
                 "nifty_realtime": results.get("nifty", {}).get("realtime", False),
                 "vix_realtime":   results.get("vix",   {}).get("realtime", False),
                 "fii_net_crore": None,
