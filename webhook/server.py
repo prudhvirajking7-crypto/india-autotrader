@@ -16,14 +16,24 @@ log = structlog.get_logger(__name__)
 
 
 def _jsonify(obj):
-    """Recursively convert numpy/pandas scalars to Python-native types for JSON serialization."""
-    import numpy as np
-    if isinstance(obj, (np.bool_,)):
-        return bool(obj)
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.floating):
-        return float(obj)
+    """Recursively convert scalars to Python-native types for JSON serialization."""
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, int):
+        return obj
+    if isinstance(obj, float):
+        return obj
+    # Handle numpy types if numpy happens to be available
+    try:
+        import numpy as np
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+    except ImportError:
+        pass
     if isinstance(obj, dict):
         return {k: _jsonify(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -467,28 +477,33 @@ def _build_router():
             "meta-llama/llama-3.2-3b-instruct:free",
         ]
 
-        # Quick market context via yfinance
-        def _get_quick_context():
-            try:
-                import yfinance as yf
-                nifty = yf.download("^NSEI", period="5d", interval="1d", auto_adjust=True, progress=False)
-                vix   = yf.download("^INDIAVIX", period="2d", interval="1d", auto_adjust=True, progress=False)
-                import pandas as pd
-                if isinstance(nifty.columns, pd.MultiIndex):
-                    nifty.columns = [c[0].lower() for c in nifty.columns]
-                if isinstance(vix.columns, pd.MultiIndex):
-                    vix.columns = [c[0].lower() for c in vix.columns]
-                n_last = float(nifty["close"].iloc[-1]) if not nifty.empty else 0
-                n_prev = float(nifty["close"].iloc[-2]) if len(nifty) > 1 else n_last
-                n_chg  = round((n_last - n_prev) / n_prev * 100, 2) if n_prev else 0
-                v_last = float(vix["close"].iloc[-1]) if not vix.empty else 15.0
-                return {"nifty_last": round(n_last, 0), "nifty_chg_pct": n_chg, "india_vix": round(v_last, 1)}
-            except Exception:
-                return {"nifty_last": 0, "nifty_chg_pct": 0, "india_vix": 15.0}
+        # Quick market context via Yahoo Finance v8 API (no pandas/yfinance needed)
+        async def _get_quick_context():
+            import httpx as _httpx
+            _headers = {"User-Agent": "Mozilla/5.0"}
+            _base = "https://query1.finance.yahoo.com/v8/finance/chart"
+
+            async def _closes(sym, rng="5d"):
+                try:
+                    async with _httpx.AsyncClient(timeout=10) as c:
+                        r = await c.get(f"{_base}/{sym}", params={"interval": "1d", "range": rng}, headers=_headers)
+                    if r.status_code != 200:
+                        return []
+                    res = r.json().get("chart", {}).get("result", [])
+                    q = res[0].get("indicators", {}).get("quote", [{}])[0] if res else {}
+                    return [x for x in (q.get("close") or []) if x is not None]
+                except Exception:
+                    return []
+
+            nifty_c, vix_c = await asyncio.gather(_closes("^NSEI"), _closes("^INDIAVIX", "2d"))
+            n_last = round(nifty_c[-1], 0) if nifty_c else 0
+            n_prev = nifty_c[-2] if len(nifty_c) > 1 else n_last
+            n_chg  = round((n_last - n_prev) / n_prev * 100, 2) if n_prev else 0
+            v_last = round(vix_c[-1], 1) if vix_c else 15.0
+            return {"nifty_last": n_last, "nifty_chg_pct": n_chg, "india_vix": v_last}
 
         import asyncio
-        loop = asyncio.get_event_loop()
-        ctx = await loop.run_in_executor(None, _get_quick_context)
+        ctx = await _get_quick_context()
 
         prompt = f"""You are an expert NSE options trader. Based on today's market:
 
@@ -579,60 +594,69 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
         WATCHLIST = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
                      "SBIN", "BHARTIARTL", "KOTAKBANK", "WIPRO", "AXISBANK"]
 
-        def _quick_scan():
-            import yfinance as yf
-            import pandas as pd
-            picks = []
-            for sym in WATCHLIST:
-                try:
-                    df = yf.download(f"{sym}.NS", period="60d", interval="1d",
-                                     auto_adjust=True, progress=False)
-                    if df.empty or len(df) < 20:
-                        continue
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = [c[0].lower() for c in df.columns]
-                    else:
-                        df.columns = [c.lower() for c in df.columns]
+        # Pure-Python RSI/SMA helpers — no pandas/numpy needed
+        def _sma(prices, n):
+            return sum(prices[-n:]) / n if len(prices) >= n else (sum(prices) / len(prices) if prices else 0.0)
 
-                    close = df["close"]
-                    sma20 = close.rolling(20).mean().iloc[-1]
-                    sma5  = close.rolling(5).mean().iloc[-1]
-                    last  = close.iloc[-1]
-                    prev  = close.iloc[-2]
-                    vol   = df["volume"].iloc[-1]
-                    avg_vol = df["volume"].rolling(20).mean().iloc[-1]
+        def _rsi14(closes):
+            if len(closes) < 15:
+                return 50.0
+            gains, losses = [], []
+            for i in range(1, len(closes)):
+                d = closes[i] - closes[i - 1]
+                gains.append(max(d, 0.0))
+                losses.append(max(-d, 0.0))
+            ag = sum(gains[-14:]) / 14
+            al = sum(losses[-14:]) / 14
+            return 100.0 if al == 0 else round(100 - 100 / (1 + ag / al), 1)
 
-                    delta = close.diff()
-                    gain = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
-                    loss = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
-                    rsi = float(100 - 100 / (1 + gain.iloc[-1] / (loss.iloc[-1] or 1e-9)))
+        async def _fetch_sym(sym):
+            import httpx as _httpx
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.NS"
+            try:
+                async with _httpx.AsyncClient(timeout=12) as c:
+                    r = await c.get(url, params={"interval": "1d", "range": "3mo"},
+                                    headers={"User-Agent": "Mozilla/5.0"})
+                if r.status_code != 200:
+                    return None
+                res = r.json().get("chart", {}).get("result", [])
+                if not res:
+                    return None
+                q = res[0].get("indicators", {}).get("quote", [{}])[0]
+                closes  = [x for x in (q.get("close")  or []) if x is not None]
+                volumes = [x for x in (q.get("volume") or []) if x is not None]
+                if len(closes) < 20:
+                    return None
+                last    = closes[-1]
+                prev    = closes[-2]
+                sma20   = _sma(closes, 20)
+                sma5    = _sma(closes, 5)
+                rsi     = _rsi14(closes)
+                avg_vol = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else 1.0
+                vol_now = volumes[-1] if volumes else avg_vol
+                vol_surge = round(vol_now / avg_vol, 1) if avg_vol > 0 else 1.0
+                chg_pct   = round((last - prev) / prev * 100, 2) if prev else 0.0
 
-                    chg_pct = round((last - prev) / prev * 100, 2)
-                    vol_surge = round(vol / avg_vol, 1) if avg_vol > 0 else 1.0
+                action = "NEUTRAL"; score = 0.0
+                if last > sma20 and sma5 > sma20 and rsi < 70:
+                    action = "BUY";  score = round(min(rsi / 100 + vol_surge * 0.1, 1.0), 2)
+                elif last < sma20 and sma5 < sma20 and rsi > 30:
+                    action = "SELL"; score = round(-min((100 - rsi) / 100 + vol_surge * 0.1, 1.0), 2)
 
-                    action = "NEUTRAL"
-                    score  = 0.0
-                    if last > sma20 and sma5 > sma20 and rsi < 70:
-                        action = "BUY"; score = round(min(rsi / 100 + vol_surge * 0.1, 1.0), 2)
-                    elif last < sma20 and sma5 < sma20 and rsi > 30:
-                        action = "SELL"; score = round(-min((100 - rsi) / 100 + vol_surge * 0.1, 1.0), 2)
-
-                    picks.append({
-                        "symbol": sym, "action": action, "score": score,
-                        "ltp": round(float(last), 2), "change_pct": chg_pct,
-                        "rsi": round(rsi, 1), "vol_surge": vol_surge,
-                        "above_sma20": bool(last > sma20),
-                        "wyckoff_phase": "Markup" if action == "BUY" else "Markdown" if action == "SELL" else "Distribution",
-                        "breakout_type": "Volume Surge" if vol_surge > 1.5 else "",
-                    })
-                except Exception:
-                    continue
-            picks.sort(key=lambda p: abs(p["score"]), reverse=True)
-            return picks
+                return {
+                    "symbol": sym, "action": action, "score": score,
+                    "ltp": round(last, 2), "change_pct": chg_pct,
+                    "rsi": rsi, "vol_surge": vol_surge,
+                    "above_sma20": last > sma20,
+                    "wyckoff_phase": "Markup" if action == "BUY" else "Markdown" if action == "SELL" else "Distribution",
+                    "breakout_type": "Volume Surge" if vol_surge > 1.5 else "",
+                }
+            except Exception:
+                return None
 
         try:
-            loop = asyncio.get_event_loop()
-            picks = await loop.run_in_executor(None, _quick_scan)
+            raw = await asyncio.gather(*[_fetch_sym(s) for s in WATCHLIST])
+            picks = sorted([p for p in raw if p], key=lambda p: abs(p["score"]), reverse=True)
             result = {"top_picks": picks, "picks": picks,
                       "scanned_at": int(time.time()), "symbols_scanned": len(WATCHLIST)}
 
@@ -653,55 +677,55 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
 
     @router.get("/api/ohlcv/{symbol}")
     async def get_ohlcv(symbol: str, days: int = 90):
-        """OHLCV candlestick data for Lightweight Charts (via yfinance fallback)."""
-        try:
-            import yfinance as yf
-            import pandas as pd
-            from datetime import datetime, timedelta
+        """OHLCV candlestick data for Lightweight Charts via Yahoo Finance v8 API."""
+        import httpx as _httpx
+        ticker = symbol.upper()
+        _range = "1y" if days >= 200 else "6mo" if days >= 120 else "3mo"
+        _hdrs = {"User-Agent": "Mozilla/5.0"}
+        _base = "https://query1.finance.yahoo.com/v8/finance/chart"
 
-            ticker = symbol.upper()
-            # Try NSE suffix first, fallback to BSE
+        candles = []
+        async with _httpx.AsyncClient(timeout=15) as client:
             for suffix in [".NS", ".BO", ""]:
                 try:
-                    df = yf.download(
-                        f"{ticker}{suffix}",
-                        period=f"{days}d",
-                        interval="1d",
-                        auto_adjust=True,
-                        progress=False,
+                    resp = await client.get(
+                        f"{_base}/{ticker}{suffix}",
+                        params={"interval": "1d", "range": _range},
+                        headers=_hdrs,
                     )
-                    if not df.empty:
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json().get("chart", {})
+                    result = data.get("result", [])
+                    if not result:
+                        continue
+                    timestamps = result[0].get("timestamp", [])
+                    q = result[0].get("indicators", {}).get("quote", [{}])[0]
+                    opens   = q.get("open",   [None] * len(timestamps))
+                    highs   = q.get("high",   [None] * len(timestamps))
+                    lows    = q.get("low",    [None] * len(timestamps))
+                    closes  = q.get("close",  [None] * len(timestamps))
+                    volumes = q.get("volume", [None] * len(timestamps))
+                    for i, ts in enumerate(timestamps):
+                        o, h, l, c, v = opens[i], highs[i], lows[i], closes[i], volumes[i]
+                        if c is None:
+                            continue
+                        candles.append({
+                            "time": int(ts),
+                            "open":   round(float(o or c), 2),
+                            "high":   round(float(h or c), 2),
+                            "low":    round(float(l or c), 2),
+                            "close":  round(float(c), 2),
+                            "volume": int(v or 0),
+                        })
+                    if candles:
                         break
                 except Exception:
                     continue
 
-            if df is None or df.empty:
-                return {"symbol": ticker, "candles": [], "error": "No data available"}
-
-            # Flatten MultiIndex columns if present
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [col[0].lower() for col in df.columns]
-            else:
-                df.columns = [c.lower() for c in df.columns]
-
-            candles = []
-            for ts, row in df.iterrows():
-                try:
-                    t = int(ts.timestamp())
-                    candles.append({
-                        "time": t,
-                        "open": round(float(row.get("open", 0)), 2),
-                        "high": round(float(row.get("high", 0)), 2),
-                        "low": round(float(row.get("low", 0)), 2),
-                        "close": round(float(row.get("close", 0)), 2),
-                        "volume": int(row.get("volume", 0)),
-                    })
-                except Exception:
-                    continue
-            return {"symbol": ticker, "candles": candles}
-        except Exception as e:
-            log.warning("ohlcv.error", symbol=symbol, error=str(e))
-            return {"symbol": symbol.upper(), "candles": [], "error": str(e)}
+        if not candles:
+            return {"symbol": ticker, "candles": [], "error": "No data available"}
+        return {"symbol": ticker, "candles": candles}
 
     async def _redis_get(key: str):
         """Safely get a Redis key; returns None if Redis is unavailable."""
@@ -725,70 +749,62 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
 
     @router.get("/api/market-context")
     async def get_market_context():
-        """Live market context via yfinance — no heavy imports needed."""
-        import asyncio
+        """Live market context via Yahoo Finance v8 API — no pandas/yfinance needed."""
+        import asyncio, httpx as _httpx
 
-        def _fetch():
-            import yfinance as yf
-            import pandas as pd
+        _hdrs  = {"User-Agent": "Mozilla/5.0"}
+        _base  = "https://query1.finance.yahoo.com/v8/finance/chart"
+        _ticks = {
+            "nifty":   "^NSEI",
+            "vix":     "^INDIAVIX",
+            "sensex":  "^BSESN",
+            "sp500":   "^GSPC",
+            "nasdaq":  "^IXIC",
+            "usdinr":  "INR=X",
+            "crude":   "CL=F",
+        }
 
-            tickers = {
-                "nifty":    "^NSEI",
-                "vix":      "^INDIAVIX",
-                "sensex":   "^BSESN",
-                "sp500":    "^GSPC",
-                "nasdaq":   "^IXIC",
-                "usdinr":   "INR=X",
-                "crude":    "CL=F",
-                "giftnifty":"GC=F",   # gold as proxy if gift nifty unavailable
-            }
+        async def _fetch_one(client, name, sym):
+            try:
+                r = await client.get(f"{_base}/{sym}",
+                                     params={"interval": "1d", "range": "5d"},
+                                     headers=_hdrs, timeout=10)
+                if r.status_code != 200:
+                    return name, 0.0, 0.0
+                res = r.json().get("chart", {}).get("result", [])
+                if not res:
+                    return name, 0.0, 0.0
+                q = res[0].get("indicators", {}).get("quote", [{}])[0]
+                closes = [x for x in (q.get("close") or []) if x is not None]
+                if not closes:
+                    return name, 0.0, 0.0
+                last = closes[-1]
+                prev = closes[-2] if len(closes) > 1 else last
+                pct  = round((last - prev) / prev * 100, 2) if prev else 0.0
+                return name, round(last, 2), pct
+            except Exception:
+                return name, 0.0, 0.0
 
-            def _safe_pct(df, col="close"):
-                try:
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = [c[0].lower() for c in df.columns]
-                    else:
-                        df.columns = [c.lower() for c in df.columns]
-                    s = df[col].dropna()
-                    if len(s) < 2: return 0.0, float(s.iloc[-1]) if len(s) else 0.0
-                    last, prev = float(s.iloc[-1]), float(s.iloc[-2])
-                    return round((last - prev) / prev * 100, 2), round(last, 2)
-                except Exception:
-                    return 0.0, 0.0
+        try:
+            async with _httpx.AsyncClient() as client:
+                tasks = [_fetch_one(client, n, s) for n, s in _ticks.items()]
+                raw = await asyncio.gather(*tasks)
 
-            results = {}
-            for name, sym in tickers.items():
-                try:
-                    df = yf.download(sym, period="5d", interval="1d",
-                                     auto_adjust=True, progress=False)
-                    pct, last = _safe_pct(df)
-                    results[name] = {"last": last, "chg_pct": pct}
-                except Exception:
-                    results[name] = {"last": 0.0, "chg_pct": 0.0}
+            results = {name: {"last": last, "chg_pct": pct} for name, last, pct in raw}
 
-            n = results.get("nifty", {})
-            v = results.get("vix",   {})
-            sp = results.get("sp500", {})
-            nq = results.get("nasdaq", {})
-            fx = results.get("usdinr", {})
-            cl = results.get("crude",  {})
+            n   = results.get("nifty",  {})
+            v   = results.get("vix",    {})
+            sp  = results.get("sp500",  {})
+            nq  = results.get("nasdaq", {})
+            fx  = results.get("usdinr", {})
+            cl  = results.get("crude",  {})
 
             vix_val = v.get("last", 15.0)
             n_chg   = n.get("chg_pct", 0.0)
             sp_chg  = sp.get("chg_pct", 0.0)
 
-            # Simple bias
-            bull_pts = sum([
-                n_chg > 0.3,
-                vix_val < 15,
-                sp_chg > 0.2,
-                nq.get("chg_pct", 0) > 0.2,
-            ])
-            bear_pts = sum([
-                n_chg < -0.3,
-                vix_val > 20,
-                sp_chg < -0.2,
-            ])
+            bull_pts = sum([n_chg > 0.3, vix_val < 15, sp_chg > 0.2, nq.get("chg_pct", 0) > 0.2])
+            bear_pts = sum([n_chg < -0.3, vix_val > 20, sp_chg < -0.2])
             bias = "BULLISH" if bull_pts >= 3 else "BEARISH" if bear_pts >= 2 else "NEUTRAL"
 
             return {
@@ -801,23 +817,18 @@ Use HOLD with empty signals if market is unclear. Max 2 signals."""
                 "nasdaq_change_pct": nq.get("chg_pct", 0),
                 "usdinr": fx.get("last", 0),
                 "crude_oil_usd": cl.get("last", 0),
-                "gift_nifty_change_pct": n_chg,   # best proxy without direct feed
+                "gift_nifty_change_pct": n_chg,
                 "fii_net_crore": None,
                 "dii_net_crore": None,
                 "score": round((bull_pts - bear_pts) / 4.0, 2),
                 "summary": (
-                    f"NIFTY {n.get('last',0):.0f} ({n_chg:+.2f}%) | "
+                    f"NIFTY {n.get('last', 0):.0f} ({n_chg:+.2f}%) | "
                     f"VIX {vix_val:.1f} | "
                     f"S&P {sp_chg:+.2f}% | "
-                    f"USD/INR {fx.get('last',0):.2f} | "
-                    f"Crude ${cl.get('last',0):.1f}"
+                    f"USD/INR {fx.get('last', 0):.2f} | "
+                    f"Crude ${cl.get('last', 0):.1f}"
                 ),
             }
-
-        try:
-            loop = asyncio.get_event_loop()
-            ctx = await loop.run_in_executor(None, _fetch)
-            return ctx
         except Exception as e:
             log.warning("market_context.error", error=str(e))
             return {"bias": "NEUTRAL", "summary": "Market data unavailable", "error": str(e)}
